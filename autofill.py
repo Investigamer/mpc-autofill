@@ -30,7 +30,15 @@ from functools import partial
 from queue import Queue
 from math import floor
 from glob import glob
-
+from cv2 import imread as cv2imread # For webp support
+from cv2 import IMREAD_UNCHANGED as cv2IMREAD_UNCHANGED # For webp support
+from cv2 import THRESH_BINARY as cv2THRESH_BINARY # For webp support
+from cv2 import threshold as cv2threshold # For webp support
+from cv2 import bitwise_not as cv2bitwise_not # For webp support
+from cv2 import inpaint as cv2inpaint # For webp support
+from cv2 import INPAINT_NS as cv2INPAINT_NS # For webp support
+from cv2 import IMWRITE_PNG_COMPRESSION as cv2IMWRITE_PNG_COMPRESSION # For webp support
+from cv2 import imwrite as cv2imwrite # For webp support
 
 from autofill_utils import currdir, XML_Order
 
@@ -104,7 +112,37 @@ cards_folder = currdir() + "/cards"
 if not os.path.exists(cards_folder):
     os.mkdir(cards_folder)
 
-
+def convert_webp_to_png(filepath,filename):
+    webp_path, webp_extension = os.path.splitext(filepath)
+    if not webp_extension.lower() == ".webp": # See if file is webp
+        return filepath, filename
+    im = cv2imread(filepath, cv2IMREAD_UNCHANGED) # Read in the file.
+    if im.shape[2] == 4:
+        # Check for Key
+        if (im[0,0][3] == 253 and im[im.shape[0]-1,0][3] == 252 and im[0,im.shape[1]-1][3] == 253 and im[im.shape[0]-1,im.shape[1]-1][3] == 252):
+            # Remove Key
+            (b, g, r, a) = im[0, 0]
+            im[0, 0] = (r, g, b, 255)
+            (b, g, r, a) = im[im.shape[0]-1, 0]
+            im[im.shape[0]-1, 0] = (r, g, b, 255)
+            (b, g, r, a) = im[0, im.shape[1]-1]
+            im[0, im.shape[1]-1] = (r, g, b, 255)
+            (b, g, r, a) = im[0, 0]
+            im[im.shape[0]-1, im.shape[1]-1] = (r, g, b, 255)
+            _, mask = cv2threshold(im[:, :, 3], 254, 254, cv2THRESH_BINARY) # Create a mask
+            mask = cv2bitwise_not(mask) # invert our mask
+            _, mask = cv2threshold(mask, 127, 255, cv2THRESH_BINARY) # Convert mask to B/W
+            im = im[:,:,:3] # Drop the alpha layer
+            im = cv2inpaint(im, mask, 3, cv2INPAINT_NS) # Using NS Method Remove Alpha 254 Pixels
+        else:
+            im = im[:,:,:3] # Drop the alpha for non keyed images as it is useless?
+    filepath = webp_path + '.png' # Edit File path to .png
+    filename = filename[:-4] + "png" # Also edit filename to .png in case it is used somewhere else.
+    # Below I am using level 5 compression, it goes higher but at cost of time.
+    # Level 7 takes 3 seconds on my PC
+    cv2imwrite(filepath, im,  [int(cv2IMWRITE_PNG_COMPRESSION), 7])# save our output
+    return filepath, filename
+    
 def switch_to_frame(driver, frame):
     try:
         driver.switch_to.frame(frame)
@@ -380,6 +418,8 @@ def download_card(bar: tqdm, cardinfo):
         # We also decide on what to stick onto the queue here - error'd cards still go onto the queue to avoid
         # counting issues, but they're put on as empty strings so the main thread knows to skip them
         if os.path.isfile(filepath) and os.path.getsize(filepath) > 0 and filename:
+            # Code to check if image is a webp, if so convert it.
+            filepath, filename = convert_webp_to_png(filepath,filename)
             # Cards are normally put onto the queue as tuples of the image filepath and slots
             card_item = (filepath, text_to_list(cardinfo[1]))
 

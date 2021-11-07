@@ -132,14 +132,15 @@ def convert_webp_to_png(filepath,filename):
             _, mask = cv2threshold(im[:, :, 3], 254, 254, cv2THRESH_BINARY) # Create a mask
             mask = cv2bitwise_not(mask) # invert our mask
             _, mask = cv2threshold(mask, 127, 255, cv2THRESH_BINARY) # Convert mask to B/W
-            im = im[:,:,:3] # Drop the alpha layer
+            im = im[:,:,:3] # Drop Alpha layer as NSPAINT needs it gone
             im = cv2inpaint(im, mask, 3, cv2INPAINT_NS) # Using NS Method Remove Alpha 254 Pixels
         else:
-            im = im[:,:,:3] # Drop the alpha for non keyed images as it is useless?
+            im = im[:,:,:3] # Drop Alpha layer as MPC doesn need it
     filepath = webp_path + '.png' # Edit File path to .png
     filename = filename[:-4] + "png" # Also edit filename to .png in case it is used somewhere else.
     # Below I am using PIL for compression as it is ~50% faster than cv2 with better results
-    im = Image.fromarray(im) # convert to format for PIL to use
+    im = im[:,:,::-1] # Fix color order for PIL
+    im = Image.fromarray(im) # Convert array to image for PIL
     im.save(filepath, option='optimize') # Save with PNG with PIL
     return filepath, filename
     

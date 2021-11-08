@@ -30,16 +30,8 @@ from functools import partial
 from queue import Queue
 from math import floor
 from glob import glob
-from cv2 import imread as cv2imread # For webp support
-from cv2 import IMREAD_UNCHANGED as cv2IMREAD_UNCHANGED # For webp support
-from cv2 import THRESH_BINARY as cv2THRESH_BINARY # For webp support
-from cv2 import threshold as cv2threshold # For webp support
-from cv2 import bitwise_not as cv2bitwise_not # For webp support
-from cv2 import inpaint as cv2inpaint # For webp support
-from cv2 import INPAINT_NS as cv2INPAINT_NS # For webp support
-from cv2 import IMWRITE_PNG_COMPRESSION as cv2IMWRITE_PNG_COMPRESSION # For webp support
-from cv2 import imwrite as cv2imwrite # For webp support
-from PIL import Image # For webp support ~50 faster at saving PNG images
+import cv2 # For webp and inpaint - Drainlife. Due to this being C++ code no space saving in using from import, it imports it all anyway - Drainlife
+from PIL import Image # For webp support ~50 faster and a little better at saving PNG images vs OpenCV at level 7 - Drainlife
 from autofill_utils import currdir, XML_Order
 
 from platform import system
@@ -116,30 +108,30 @@ def convert_webp_to_png(filepath,filename):
     webp_path, webp_extension = os.path.splitext(filepath)
     if not webp_extension.lower() == ".webp": # See if file is webp
         return filepath, filename
-    im = cv2imread(filepath, cv2IMREAD_UNCHANGED) # Read in the file.
+    im = cv2.imread(filepath, cv2.IMREAD_UNCHANGED) # Read in the file.
     if im.shape[2] == 4:
-        # Check for Key
+        # Check for Magic Text Key
         if (im[0,0][3] == 253 and im[im.shape[0]-1,0][3] == 252 and im[0,im.shape[1]-1][3] == 253 and im[im.shape[0]-1,im.shape[1]-1][3] == 252):
-            # Remove Key
+            # Remove Key by setting alpha of each corner to 255
             (b, g, r, a) = im[0, 0]
-            im[0, 0] = (r, g, b, 255)
+            im[0, 0] = (b, g, r, 255)
             (b, g, r, a) = im[im.shape[0]-1, 0]
-            im[im.shape[0]-1, 0] = (r, g, b, 255)
+            im[im.shape[0]-1, 0] = (b, g, r, 255)
             (b, g, r, a) = im[0, im.shape[1]-1]
-            im[0, im.shape[1]-1] = (r, g, b, 255)
+            im[0, im.shape[1]-1] = (b, g, r, 255)
             (b, g, r, a) = im[0, 0]
-            im[im.shape[0]-1, im.shape[1]-1] = (r, g, b, 255)
-            _, mask = cv2threshold(im[:, :, 3], 254, 254, cv2THRESH_BINARY) # Create a mask
-            mask = cv2bitwise_not(mask) # invert our mask
-            _, mask = cv2threshold(mask, 127, 255, cv2THRESH_BINARY) # Convert mask to B/W
-            im = im[:,:,:3] # Drop Alpha layer as NSPAINT needs it gone
-            im = cv2inpaint(im, mask, 3, cv2INPAINT_NS) # Using NS Method Remove Alpha 254 Pixels
+            im[im.shape[0]-1, im.shape[1]-1] = (b, g, r, 255)
+            _, mask = cv2.threshold(im[:, :, 3], 254, 254, cv2.THRESH_BINARY) # Create a mask to idenfity Magic Text
+            mask = cv2.bitwise_not(mask) # invert our mask for use with INPAINT_NS
+            _, mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY) # Convert mask to B/W for use with inpaint
+            im = im[:,:,:3] # Drop Alpha layer as inpaint needs it removed
+            im = cv2.inpaint(im, mask, 3, cv2.INPAINT_NS) # Using NS Method for Magic Text removal
         else:
             im = im[:,:,:3] # Drop Alpha layer as MPC doesn need it
     filepath = webp_path + '.png' # Edit File path to .png
     filename = filename[:-4] + "png" # Also edit filename to .png in case it is used somewhere else.
     # Below I am using PIL for compression as it is ~50% faster than cv2 with better results
-    im = im[:,:,::-1] # Fix color order for PIL
+    im = im[:,:,::-1] # Fix color order for PIL BGR to RGB
     im = Image.fromarray(im) # Convert array to image for PIL
     im.save(filepath, option='optimize') # Save with PNG with PIL
     return filepath, filename

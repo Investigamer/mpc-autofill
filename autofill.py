@@ -1,5 +1,6 @@
 # To package up as executable, run this in command prompt:
 # (windows) pyinstaller --onefile --hidden-import=colorama --hidden-import=jinxed.terminfo.vtwin10 --icon=favicon.ico autofill.py
+# (windows with UPX) C:\Python\Python39\Scripts\pyinstaller.exe --onefile --hidden-import=colorama --hidden-import=jinxed.terminfo.vtwin10 --icon=favicon.ico --upx-dir UPX\upx-3.96-win32 autofill.py
 # (macos) pyinstaller --onefile --hidden-import=colorama --hidden-import=inquirer --icon=favicon.ico autofill.py
 
 import colorama
@@ -31,7 +32,6 @@ from queue import Queue
 from math import floor
 from glob import glob
 import cv2 # For webp and inpaint - Drainlife. Due to this being C++ code no space saving in using from import, it imports it all anyway - Drainlife
-from PIL import Image # For webp support ~50 faster and a little better at saving PNG images vs OpenCV at level 7 - Drainlife
 from autofill_utils import currdir, XML_Order
 
 from platform import system
@@ -106,7 +106,7 @@ if not os.path.exists(cards_folder):
 
 def convert_webp_to_png(filepath,filename):
     webp_path, webp_extension = os.path.splitext(filepath)
-    if not webp_extension.lower() == ".webp": # See if file is webp
+    if not (webp_extension.lower() == ".webp" or webp_extension.lower() == ".png"): # See if file is webp or png
         return filepath, filename
     im = cv2.imread(filepath, cv2.IMREAD_UNCHANGED) # Read in the file.
     if im.shape[2] == 4:
@@ -126,14 +126,21 @@ def convert_webp_to_png(filepath,filename):
             _, mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY) # Convert mask to B/W for use with inpaint
             im = im[:,:,:3] # Drop Alpha layer as inpaint needs it removed
             im = cv2.inpaint(im, mask, 3, cv2.INPAINT_NS) # Using NS Method for Magic Text removal
-        else:
-            im = im[:,:,:3] # Drop Alpha layer as MPC doesn need it
-    filepath = webp_path + '.png' # Edit File path to .png
-    filename = filename[:-4] + "png" # Also edit filename to .png in case it is used somewhere else.
-    # Below I am using PIL for compression as it is ~50% faster than cv2 with better results
-    im = im[:,:,::-1] # Fix color order for PIL BGR to RGB
-    im = Image.fromarray(im) # Convert array to image for PIL
-    im.save(filepath, option='optimize') # Save with PNG with PIL
+        elif webp_extension.lower() == ".png":
+            # Leave RGBA non Magic Text PNGs untouched
+            return filepath, filename
+    elif (webp_extension.lower() == ".png"):
+        # Leave RGB non Magic Text PNGs untouched
+        return filepath, filename
+     
+    if (webp_extension.lower() == ".webp"):
+        # Change WebP file variables to end in png
+        filepath = webp_path + '.png' # Edit File path to .png
+        filename = filename[:-4] + "png" # Also edit filename to .png in case it is used somewhere else.        
+
+    # Save out our file using a quick & reasonable compression
+
+    cv2.imwrite(filepath, im, [cv2.IMWRITE_PNG_COMPRESSION, 5, cv2.IMWRITE_PNG_STRATEGY,2])
     return filepath, filename
     
 def switch_to_frame(driver, frame):

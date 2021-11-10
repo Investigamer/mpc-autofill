@@ -121,9 +121,7 @@ def convert_webp_to_png(filepath,filename):
             im[0, im.shape[1]-1] = (b, g, r, 255)
             (b, g, r, a) = im[0, 0]
             im[im.shape[0]-1, im.shape[1]-1] = (b, g, r, 255)
-            _, mask = cv2.threshold(im[:, :, 3], 254, 254, cv2.THRESH_BINARY) # Create a mask to idenfity Magic Text
-            mask = cv2.bitwise_not(mask) # invert our mask for use with INPAINT_NS
-            _, mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY) # Convert mask to B/W for use with inpaint
+            _, mask = cv2.threshold(im[:, :, 3], 254, 255, cv2.THRESH_BINARY_INV) # Create a PROPER mask to idenfity Magic Text
             im = im[:,:,:3] # Drop Alpha layer as inpaint needs it removed
             im = cv2.inpaint(im, mask, 3, cv2.INPAINT_NS) # Using NS Method for Magic Text removal
         elif webp_extension.lower() == ".png":

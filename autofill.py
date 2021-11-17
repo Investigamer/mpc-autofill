@@ -111,16 +111,11 @@ def convert_webp_to_png(filepath,filename):
     im = cv2.imread(filepath, cv2.IMREAD_UNCHANGED) # Read in the file.
     if im.shape[2] == 4:
         # Check for Magic Text Key
-        if (im[0,0][3] == 253 and im[im.shape[0]-1,0][3] == 252 and im[0,im.shape[1]-1][3] == 253 and im[im.shape[0]-1,im.shape[1]-1][3] == 252):
-            # Remove Key by setting alpha of each corner to 255
-            (b, g, r, a) = im[0, 0]
-            im[0, 0] = (b, g, r, 255)
-            (b, g, r, a) = im[im.shape[0]-1, 0]
-            im[im.shape[0]-1, 0] = (b, g, r, 255)
-            (b, g, r, a) = im[0, im.shape[1]-1]
-            im[0, im.shape[1]-1] = (b, g, r, 255)
-            (b, g, r, a) = im[0, 0]
-            im[im.shape[0]-1, im.shape[1]-1] = (b, g, r, 255)
+        if (im.shape[2] == 4 and (im[0,0][3] == 254 or im[0,0][3] == 253) and (im[im.shape[0]-1,0][3] == 254 or im[im.shape[0]-1,0][3] == 253) and (im[0,im.shape[1]-1][3] == 254 or im[0,im.shape[1]-1][3] == 253) and (im[im.shape[0]-1,im.shape[1]-1][3] == 254 or im[im.shape[0]-1,im.shape[1]-1][3] == 253) and im[1,1][3] > 253 and im[im.shape[0]-2,1][3] > 253 and im[1,im.shape[1]-2][3] > 253 and im[im.shape[0]-2,im.shape[1]-2][3] > 253):
+            im[0,0][3] += 1 # Remove Key
+            im[im.shape[0]-1,0][3] += 1 # Remove Key
+            im[0,im.shape[1]-1][3] += 1 # Remove Key
+            im[im.shape[0]-1,im.shape[1]-1][3] += 1 # Remove Key
             _, mask = cv2.threshold(im[:, :, 3], 254, 255, cv2.THRESH_BINARY_INV) # Create a PROPER mask to idenfity Magic Text
             im = im[:,:,:3] # Drop Alpha layer as inpaint needs it removed
             im = cv2.inpaint(im, mask, 3, cv2.INPAINT_NS) # Using NS Method for Magic Text removal

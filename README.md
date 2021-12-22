@@ -2,7 +2,7 @@
 
 Automating MakePlayingCards's online ordering system.
 
-The below guide describes the procedure for setting up the web component. If you're here to download the clientside program, check the [Releases](releases/) tab.
+The below guide describes the procedure for setting up the web component. If you're here to download the clientside program, check the [Releases](https://github.com/MrTeferi/MPC-Fill/releases) tab.
 
 # Preparation
 

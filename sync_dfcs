@@ -1,4 +1,5 @@
 # helper script to synchronise dfcs in database w/ scryfall with ez command    
 
-cd ~/mpc-autofill/MPCAutofill
-~/mpc-autofill/MPCAutofill/env/bin/python ~/mpc-autofill/MPCAutofill/manage.py update_dfcs
+cd ~/mpcfill/MPCAutofill
+
+~/mpcfill/venv/bin/python ~/mpcfill/MPCAutofill/manage.py update_dfcs

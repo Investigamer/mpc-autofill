@@ -168,3 +168,5 @@ MPCAutofill/client_secrets.json
 static
 *.db
 .env_prod
+staticroot/
+MPCAutofill/cardpicker/migrations/__pycache__/

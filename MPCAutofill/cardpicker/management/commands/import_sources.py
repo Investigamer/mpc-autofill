@@ -20,8 +20,8 @@ def read_sources_csv():
                     id=row["key"],
                     drive_id=row["drive_id"],
                     drive_link="https://drive.google.com/open?id=" + row["drive_id"]
-                    if row["drive_public"] != "FALSE"
-                    else "",
+                    if row["drive_public"] != "false"
+                    else "0",
                     description=row["description"],
                     order=i,
                 )

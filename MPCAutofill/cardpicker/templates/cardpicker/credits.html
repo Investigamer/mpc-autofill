@@ -12,14 +12,14 @@
     <div class="alert alert-secondary" role="alert">
         <h3>Contribution Guidelines</h3>
         <ul>
-            <li>Ensure each image has a file extension,</li>
+            <li>Image filetype must be either <code>png</code> (recommended) or <code>jpeg</code></li>
             <li>When you have multiple versions of a card in the same folder, use parentheses to differentiate them 
-                &#8212 e.g. <code>Image A.png</code> and <code>Image A (Extended).png</code>,
+                &#8212 e.g. <code>Image A.png</code> and <code>Image A (Extended).png</code>
             </li>
-            <li>Store your token images in a folder called <code>Tokens</code> (anywhere on your drive),</li>
-            <li>Store your cardback images in a folder called <code>Cardbacks</code> (anywhere on your drive),</li>
-            <li>Prepend the names of any folders you don't want to be indexed by MPC Autofill with <code>!</code> 
-                &#8212 e.g. <code>!Misc and Art</code>,</li>
+            <li>Store your token images in a folder called <code>Tokens</code> (anywhere on your drive)</li>
+            <li>Store your cardback images in a folder called <code>Cardbacks</code> (anywhere on your drive)</li>
+            <li>Prepend the names of any folders you don't want to be indexed by MPC Fill with <code>!</code> 
+                &#8212 e.g. <code>!Misc and Art</code></li>
             <li>Limit your files to less than 30 MB per image &#8212 this is the maximum that Google Scripts can return
                 in one request, which means that <code>autofill.exe</code> won't work with images larger than this. Due
                 to this limitation, images larger than 30 MB will not be indexed,
@@ -39,11 +39,12 @@
         {% for source in sources %}
             <tr>
                 <td><p>{{ source.id }}</p></td>
-                {% if source.drive_link %}
-                    <td style="text-align: center"><a target="_blank"
-                        href="{{ source.drive_link }}">Link</a></td>
+                {% if source.drive_link == "0" %}
+                        <td style="text-align: center; font-weight: bold;">Private</td>
                 {% else %}
-                    <td></td>
+                    <td style="text-align: center"><a target="_blank"
+                        href="{{ source.drive_link }}">Link</a>
+                    </td>
                 {% endif %}
                 <td><b>{{ source.qty_cards }}</b> cards, <b>{{ source.qty_cardbacks }}</b> cardbacks,
                     and <b>{{ source.qty_tokens }}</b> tokens, at <b>{{ source.avgdpi }}</b> DPI on average

@@ -91,6 +91,8 @@ def search_new_page(request):
 def legal(request):
     return render(request, "cardpicker/legal.html")
 
+def guide(request):
+    return render(request, "cardpicker/guide.html")
 
 def credits(request):
     sources = [x.to_dict() for x in Source.objects.all()]

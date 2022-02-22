@@ -18,14 +18,14 @@
         gtag('config', '{{ GTAG }}');
     </script>
 
-    <title>{% block title %} MPC Autofill {% endblock %}</title>
+    <title>{% block title %} MPC Fill {% endblock %}</title>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     {% block description %}
         <meta name="description"
               content="The easiest way to print kitchen-table proxy cards for Magic: The Gathering (MTG) with MakePlayingCards (MPC). No prior knowledge required.">
     {% endblock %}
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootswatch@4.6.0/dist/superhero/bootstrap.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootswatch@4.6.0/dist/darkly/bootstrap.min.css">
     <link rel="stylesheet" type="text/css" href="{% static 'css/custom.css' %}">
     <script src="http://code.jquery.com/jquery.min.js"></script>
     <script src="https://code.jquery.com/ui/1.12.1/jquery-ui.min.js"></script>
@@ -38,32 +38,42 @@
 </head>
 <body id="id_body" style="touch-action: manipulation;">
 {# Navbar #}
-<nav class="navbar navbar-expand-md navbar-light bg-primary fixed-top">
-    <div class="container-fluid">
+<nav class="navbar navbar-expand-lg navbar-dark bg-primary fixed-top" style="height: 50px;">
+    <span class="container justify-content-center fixed-top align-middle">
         <a class="navbar-brand" href="/">
-            <img src="{% static 'cardpicker/logolowres.png' %}?10" width="30" height="30">
-            <b>MPC Autofill</b></a>
+            <img src="{% static 'cardpicker/logolowres.png' %}?10" width="40" height="40" style="margin-right: 5px;">
+            <span class="align-middle"><b>MPC Fill</b></span>
+        </a>
         <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarSupportedContent"
                 aria-controls="navbarSupportedContent" aria-expanded="false" aria-label="Toggle navigation">
             <span class="navbar-toggler-icon"></span>
         </button>
-        <div class="collapse navbar-collapse" id="navbarSupportedContent">
+        <div class="collapse navbar-collapse" id="navbarSupportedContent" style="font-weight: bold;">
             <ul class="navbar-nav mr-auto">
                 <li class="nav-item">
                     <a class="nav-link" href="/new">What's New?</a>
                 </li>
                 <li class="nav-item">
-                    <a class="nav-link" href="/credits">Contributions</a>
+                    <a class="nav-link" href="/credits">Credits</a>
                 </li>
                 <li class="nav-item">
-                    <a class="nav-link" href="https://github.com/ndepaola/mpc-autofill" target="_blank">
-                        GitHub
-                    </a>
+                    <a class="nav-link" href="/guide">Guide</a>
+                </li>
+            </ul>
+            <ul class="navbar-nav justify-content-end">
+                <li class="nav-item">
+                    <a class="nav-link" href="https://www.reddit.com/r/magicproxies/" target="_blank">Reddit</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="https://discord.gg/3kXw2qQwRH" target="_blank">Discord</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="/legal">About</a>
                 </li>
             </ul>
         </div>
 
-    </div>
+    </span>
 </nav>
 <div class="container addmargin">
     {# error message toast #}
@@ -90,7 +100,7 @@
             </div>
             <div class="toast-body">
                 <p>
-                MPC Autofill uses cookies for remembering your search settings, and for collecting analytics
+                MPC Fill uses cookies for remembering your search settings, and for collecting analytics
                 data to help improve the site. Your data is never shared with anyone. Would you like to opt
                 out of analytics cookies?
                 </p>

@@ -21,23 +21,23 @@
 
     {% if mobile %}
     <div class="alert alert-primary" role="alert">
-        It seems like you're on a mobile device! Please note that MPC Autofill requires a macOS or Windows computer
+        It seems like you're on a mobile device! Please note that MPC Fill requires a macOS or Windows computer
         to run the executable that fills your order into MPC.
     </div>
     {% endif %}
     <div class="row">
         <div class="col-lg-6 col-md-6 col-md-12">
-            <h2>MPC Autofill</h2>
+            <h2>Welcome to MPC Fill!</h2>
             <p>
-                MPC Autofill automates the process of printing cards through
+                MPC Fill automates the process of printing playtest cards through
                 <a href="https://www.makeplayingcards.com/" target="_blank">MakePlayingCards.com</a>
-                with images hosted on public Google Drives.
+                with images hosted on community submitted Google Drives.
             </p>
             <p>
                 Type your desired card list into the text box and hit <b>Submit</b>. One card per line.
-                Click <b>Search Settings</b> to change which drives are searched, and the order in which cards are shown.
-                You can also toggle between fuzzy (forgiving) and precise (exact) search modes. Search for tokens by
-                prepending the query with <code>t:</code> &#8212 for example, <code>t:goblin</code>.
+                Click <b>Settings</b> to change which drives are searched, and the order in which cards are shown.
+                You can also toggle between fuzzy (forgiving) and precise (exact) search mode. Search for tokens by
+                prepending the card name with <code>t:</code> &#8212 for example, <code>t:goblin</code>.
             </p>
             <p>
                 You can upload your order as a CSV, specifying quantities and the queries for card fronts and backs.
@@ -53,44 +53,44 @@
         </div>
     </div>
 
-    <div class="row">
-        <div class="col-lg-6">
-            <div style="text-align: center">
-                <a class="btn btn-block btn-info mt-2" style="border-radius: 200px" href="#">Guide</a>
-            </div>
-        </div>
-        <div class="col-lg-6">
-            <input form="cardinput" type="submit" class="btn btn-success mt-2" value="Submit">
+    <div class="row justify-content-end">
+        <div class="col-lg-6 col-md-6 col-md-12"></div>
+        <div class="col-lg-6 col-md-6 col-md-12">
+            <div class="container-mx-0 d-flex justify-content-end">
 
-            <button type="button" class="btn btn-primary mt-2" data-toggle="modal" data-target="#selectDrivesModal">
-                Search Settings
-            </button>
-
-            <button type="button" class="btn btn-secondary dropdown-toggle mt-2" id="uploadCardsBtn"
-                    data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-                Upload List
-            </button>
-            <div class="dropdown-menu" aria-labelledby="uploadCardsBtn">
-                {# csv upload form #}
-                <form method="post" action="{% url 'input_csv' %}" id="input_csv" enctype="multipart/form-data">
-                    {% csrf_token %}
-                    <label class="dropdown-item" onchange="$('#input_csv').submit()">
-                        CSV File<input type="file" accept=".csv" hidden name="file" id="csvfile">
-                    </label>
-                </form>
-
-                {# xml upload form #}
-                <form method="post" action="{% url 'input_xml' %}" id="input_xml" enctype="multipart/form-data">
-                    {% csrf_token %}
-                    <label class="dropdown-item" onchange="$('#input_xml').submit()">
-                        XML Order<input type="file" accept=".xml" hidden name="file" id="xmlfile">
-                    </label>
-                </form>
-
-                {# decklist import form #}
-                <button type="button" class="dropdown-item" data-toggle="modal" data-target="#inputLinkModal">
-                    From URL
+                <button type="button" class="btn btn-outline-primary dropdown-toggle mt-2" id="uploadCardsBtn"
+                        data-toggle="dropdown" aria-haspopup="true" aria-expanded="false" style="color: #fff;">
+                    Upload List
                 </button>
+                
+                <div class="dropdown-menu" aria-labelledby="uploadCardsBtn">
+                    {# csv upload form #}
+                    <form method="post" action="{% url 'input_csv' %}" id="input_csv" enctype="multipart/form-data">
+                        {% csrf_token %}
+                        <label class="dropdown-item" onchange="$('#input_csv').submit()">
+                            CSV File<input type="file" accept=".csv" hidden name="file" id="csvfile">
+                        </label>
+                    </form>
+
+                    {# xml upload form #}
+                    <form method="post" action="{% url 'input_xml' %}" id="input_xml" enctype="multipart/form-data">
+                        {% csrf_token %}
+                        <label class="dropdown-item" onchange="$('#input_xml').submit()">
+                            XML Order<input type="file" accept=".xml" hidden name="file" id="xmlfile">
+                        </label>
+                    </form>
+
+                    {# decklist import form #}
+                    <button type="button" class="dropdown-item" data-toggle="modal" data-target="#inputLinkModal">
+                        From URL
+                    </button>
+                </div>
+                &nbsp;
+                <button type="button" class="btn btn-outline-info mt-2" data-toggle="modal" data-target="#selectDrivesModal" style="color: #fff;">
+                    Settings
+                </button>
+                &nbsp;
+                <input form="cardinput" type="submit" class="btn btn-outline-success mt-2" value="Submit" style="color: #fff;">
             </div>
         </div>
     </div>
@@ -122,7 +122,7 @@
                     </button>
                 </div>
                 <div class="modal-body">
-                    Paste a link to a card list hosted on one of the below sites (not affiliated) to import into MPC Autofill:
+                    Paste a link to a card list hosted on one of the below sites (not affiliated) to import into MPC Fill:
                     <ul>
                         {% for import_site in import_sites %}
                             <li><a href="{{ import_site.1|safe }}" target="_blank">{{ import_site.0|safe }}</a></li>

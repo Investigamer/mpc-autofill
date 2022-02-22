@@ -7,6 +7,7 @@ urlpatterns = [
     path("credits", views.credits, name="credits"),
     path("new", views.new_cards, name="new"),
     path("legal", views.legal, name="legal"),
+    path("guide", views.guide, name="guide"),
     re_path(r"^ajax/getnew/$", views.search_new_page, name="getnew"),
     re_path(r"^ajax/search/$", views.search_individual, name="search"),
     re_path(r"^ajax/msearch/$", views.search_multiple, name="msearch"),

@@ -52,6 +52,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "django_crontab",
     "django_elasticsearch_dsl",
     "crispy_forms",
     "django_user_agents",
@@ -125,7 +126,6 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
-
 # Internationalization
 # https://docs.djangoproject.com/en/3.0/topics/i18n/
 
@@ -167,3 +167,9 @@ EMAIL_HOST_PASSWORD = env("DJANGO_GMAIL_PASSWORD", default="")
 EMAIL_PORT = 587
 EMAIL_USE_TLS = True
 DEFAULT_FROM_EMAIL = "default from email"
+
+# Cronjob to update database and sync dfcs
+CRONJOBS = [
+    ('0 * * * *', 'django.core.management.call_command', ['update_database']),
+    ('2 * * * 0', 'django.core.management.call_command', ['update_dfcs'])
+]

@@ -44,6 +44,7 @@ else:
 """
 Drive File Info API
 https://script.google.com/macros/s/AKfycbw90rkocSdppkEuyVdsTuZNslrhd5zNT3XMgfucNMM1JjhLl-Q/exec
+new: https://script.google.com/macros/s/AKfycbxMlUD-EXV-bwEtETl4cSXcJOuFyk43WrL1xrDVQIcF0BpwyGZ4DXa08uhMg14fOIgT/exec
 
 function doPost(e) {
   return (function(id){
@@ -62,6 +63,7 @@ function doPost(e) {
 """
 Drive File Contents API
 https://script.google.com/macros/s/AKfycbzzCWc2x3tfQU1Zp45LB1P19FNZE-4njwzfKT5_Rx399h-5dELZWyvf/exec
+new: https://script.google.com/macros/s/AKfycbz6cHSxSdzoP-QwkBpQpsxv8VYX0lX7YFc0fVcQz546P05tcXbFnnkg3fom4GwgUelbqQ/exec
 
 function doPost(e) {
   return (function(id){
@@ -156,7 +158,7 @@ def fill_cards(bar: tqdm, driver, root):
         print(
             "Configuring a new order. If you'd like to continue uploading cards to an existing project,"
             "start this program with the -skipsetup option and follow the printed instructions."
-            "example: ./autofill -skipsetup"
+            "example: ./autofill -skipsetup\n"
         )
         configure_order(driver)
     else:
@@ -334,7 +336,7 @@ def download_card(bar: tqdm, cardinfo):
             # use the results with a 'with' statement to avoid issues w/ connection broken
             try:
                 with requests_post(
-                    "https://script.google.com/macros/s/AKfycbw90rkocSdppkEuyVdsTuZNslrhd5zNT3XMgfucNMM1JjhLl-Q/exec",
+                    "https://script.google.com/macros/s/AKfycbxMlUD-EXV-bwEtETl4cSXcJOuFyk43WrL1xrDVQIcF0BpwyGZ4DXa08uhMg14fOIgT/exec",
                     data={"id": file_id},
                     timeout=30,
                 ) as r_info:
@@ -378,7 +380,7 @@ def download_card(bar: tqdm, cardinfo):
                     while attempt_counter < 5 and not image_downloaded:
 
                         with requests_post(
-                            "https://script.google.com/macros/s/AKfycbzzCWc2x3tfQU1Zp45LB1P19FNZE-4njwzfKT5_Rx399h-5dELZWyvf/exec",
+                            "https://script.google.com/macros/s/AKfycbz6cHSxSdzoP-QwkBpQpsxv8VYX0lX7YFc0fVcQz546P05tcXbFnnkg3fom4GwgUelbqQ/exec",
                             data={"id": file_id},
                             timeout=120,
                         ) as r_contents:
@@ -502,8 +504,8 @@ if __name__ == "__main__":
     print("MPC Autofill initialising.")
     t = time.time()
 
-    # xml_glob = list(glob(currdir()+"*.xml"))
-    xml_glob = list(glob(os.path.join(currdir(), "*.xml")))
+    #xml_glob = list(glob(os.path.join(currdir(), "*.xml")))
+    xml_glob = list(glob("*.xml"))
     filename = ""
     if len(xml_glob) <= 0:
         input("No XML files found in this directory. Press enter to exit.")
@@ -541,7 +543,7 @@ if __name__ == "__main__":
         f"({TEXT_BOLD}{'foil' if order.details.foil else 'nonfoil'}{TEXT_END}).\n\n"
         f"Starting card downloader and webdriver processes."
     )
-
+    
     # Extract information out of XML doc
     # Determine if this XML file is pre-3.0 (does not include search queries or filenames)
     if len(order.fronts[0]) > 2:
@@ -565,12 +567,12 @@ if __name__ == "__main__":
     driver.set_window_size(1200, 900)
     driver.implicitly_wait(5)
     driver.set_network_conditions(offline=False, latency=5, throughput=5 * 125000)
-
+    
     # Create ThreadPoolExecutor to download card images with, and progress bars for downloading and uploading
     with ThreadPoolExecutor(max_workers=5) as pool, tqdm(
-        position=0, total=len(cardsinfo), desc="DL", leave=True
+        position=0, total=len(cardsinfo), desc="DL", delay=0.01, colour="green"
     ) as dl_progress, tqdm(
-        position=1, total=len(cardsinfo), desc="UL", leave=False
+        position=1, total=len(cardsinfo), desc="UL", delay=0.01, colour="green"
     ) as ul_progress:
         # Download each card image in parallel, with the same progress bar input each time
         pool.map(partial(download_card, dl_progress), cardsinfo)

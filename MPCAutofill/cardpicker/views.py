@@ -12,7 +12,9 @@ from django.conf import settings
 from django.db.models import Q
 from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
+from rich.console import Console
 
+from MPCAutofill.settings import PATREON_CACHE
 from cardpicker.constants import (
     CARDS_PAGE_SIZE,
     DEFAULT_LANGUAGE,
@@ -22,7 +24,6 @@ from cardpicker.constants import (
 )
 from cardpicker.documents import CardSearch
 from cardpicker.integrations.integrations import get_configured_game_integration
-from cardpicker.integrations.patreon import get_patreon_campaign_details, get_patrons
 from cardpicker.models import Card, CardTypes, DFCPair, Source, summarise_contributions
 from cardpicker.schema_types import CardbacksRequest, CardbacksResponse
 from cardpicker.schema_types import Cards as SampleCards
@@ -186,7 +187,6 @@ def post_explore_search(request: HttpRequest) -> HttpResponse:
     }
     cards = [card_id_object_dict[card_id] for card_id in card_ids]
     return JsonResponse(ExploreSearchResponse(cards=cards, count=count).model_dump())
-
 
 @csrf_exempt
 @ErrorWrappers.to_json
@@ -482,19 +482,23 @@ def get_patreon(request: HttpRequest) -> HttpResponse:
     if request.method != "GET":
         raise BadRequestException("Expected GET request.")
 
-    campaign, tiers = get_patreon_campaign_details()
-    members = get_patrons(campaign.id, tiers) if campaign is not None and tiers is not None else None
+    # Load and return cached Patreon data if it exists
+    if PATREON_CACHE.is_file():
+        with open(PATREON_CACHE, "r") as f:
+            _data = json.load(f)
+        if _data:
+            return JsonResponse(
+                PatreonResponse(**_data).model_dump())
 
+    # Return empty dataset
     return JsonResponse(
         PatreonResponse(
             patreon=Patreon(
-                url=settings.PATREON_URL,
-                members=members or [],
-                tiers=tiers,
-                campaign=campaign,
-            )
-        ).model_dump()
-    )
+                url=None,
+                members=[],
+                tiers=None,
+                campaign=None)
+        ).model_dump())
 
 
 @csrf_exempt

@@ -787,6 +787,7 @@ class NewCardsPageResponse(BaseModel):
 class CampaignClass(BaseModel):
     about: str
     id: str
+    url: str
 
     @staticmethod
     def from_dict(obj: Any) -> "CampaignClass":
@@ -848,6 +849,7 @@ class SupporterTier(BaseModel):
 
 
 class Patreon(BaseModel):
+    # Todo: Remove url in favor of just using url from Campaign field
     members: List[Supporter]
     campaign: Optional[CampaignClass] = None
     tiers: Optional[Dict[str, SupporterTier]] = None

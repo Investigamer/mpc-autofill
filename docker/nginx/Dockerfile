@@ -1,25 +1,22 @@
-# Docker to serve the static Next.js frontend via nginx
-FROM node:22.15-alpine AS builder
+FROM nginx:1.29.1-alpine
 
-# Copy frontend files
+# Copy common and frontend files
 COPY frontend /frontend
-RUN rm -rf /frontend/out
+COPY docker/nginx /docker
 WORKDIR /frontend
 
-# Point frontend at the correct URL to communicate with the backend
-RUN if ! grep -q "^NEXT_PUBLIC_BACKEND_URL=" /frontend/.env /frontend/.env.local 2>/dev/null; then \
-    echo "NEXT_PUBLIC_BACKEND_URL=http://localhost:80" > /frontend/.env.local; \
-fi
+# install NPM and NPX
+RUN rm -rf /frontend/out; \
+    apk add --update --no-cache bash gettext npm; \
+    chmod +x /docker/scripts/entrypoint.sh; \
+    dos2unix /docker/scripts/entrypoint.sh; \
+    if ! grep -q "^NEXT_PUBLIC_BACKEND_URL=" /frontend/.env /frontend/.env.local 2>/dev/null; then \
+      echo "NEXT_PUBLIC_BACKEND_URL=http://localhost:80" > /frontend/.env.local; \
+    fi; \
+    rm /etc/nginx/conf.d/default.conf; \
+    cp /docker/nginx.conf /etc/nginx/conf.d/nginx.conf; \
+    rm -rf /var/cache/apk/*
 
-# Build frontend, placing files in /frontend/out
-RUN npm install
-RUN npx next build
-
-FROM nginx:1.21-alpine
-
-# Copy our static site files into the directory that the nginx docker container consumes files from
-COPY --from=builder /frontend/out /usr/share/nginx/html
-
-# Copy nginx config
-RUN rm /etc/nginx/conf.d/default.conf
-COPY docker/nginx/nginx.conf /etc/nginx/conf.d
+# Prepare entrypoint
+EXPOSE 80
+CMD ["/docker/scripts/entrypoint.sh"]

@@ -1,72 +1,45 @@
-# Docker to serve Django via Unicorn
-FROM ubuntu:22.04 AS builder
+# UV Docker / Multi-Stage
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS builder
+ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=0
 
-# Keeps Python from generating .pyc files in the container
-ENV PYTHONDONTWRITEBYTECODE=1
-# Turns off buffering for easier container logging
-ENV PYTHONUNBUFFERED=1
+# Install project dependencies
+WORKDIR /app/MPCAutofill
+RUN --mount=type=cache,target=/root/.cache/uv \
+    --mount=type=bind,source=MPCAutofill/uv.lock,target=uv.lock \
+    --mount=type=bind,source=MPCAutofill/pyproject.toml,target=pyproject.toml \
+    uv sync --locked --no-install-project --no-dev
 
-# Install tools and additional dependencies
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        dos2unix \
-        python3-pip python3-dev \
-        gcc netcat curl libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
+# Copy project files
+COPY MPCAutofill/. /app/MPCAutofill/.
+COPY docker/django/scripts/. /app/MPCAutofill/scripts/.
 
-# Copy requirements.txt
-COPY MPCAutofill/requirements.txt /MPCAutofill/
-WORKDIR /MPCAutofill
+# Install the project
+RUN --mount=type=cache,target=/root/.cache/uv \
+    set -eux; \
+    uv sync --locked --no-dev; \
+    uv add gunicorn; \
+    mv config config-staging
 
-# Install pip requirements
-RUN pip3 install gunicorn wheel
-RUN pip3 install -r requirements.txt
+# Switch to final image without uv
+FROM python:3.12-slim-bookworm
 
-# Copy relevant files from repository
-COPY docker /MPCAutofill/docker
-COPY MPCAutofill /MPCAutofill/MPCAutofill
+# Copy application from the builder, add project to path
+COPY --from=builder --chown=urza:urza /app /app
+ENV PATH="/app/MPCAutofill/.venv/bin:$PATH"
+WORKDIR /app/MPCAutofill
 
-# Handle environment variables - write out `.env` with the variables passed from the
-# compose file (and overwrite `.env` as copied from the host machine in the process)
-RUN touch /MPCAutofill/MPCAutofill/MPCAutofill/.env
-RUN echo "DATABASE_HOST=$DATABASE_HOST" > /MPCAutofill/MPCAutofill/MPCAutofill/.env  # using > to overwrite the file
-RUN echo "ELASTICSEARCH_HOST=$ELASTICSEARCH_HOST" >> /MPCAutofill/MPCAutofill/MPCAutofill/.env
-RUN echo "DEBUG=$DEBUG" >> /MPCAutofill/MPCAutofill/MPCAutofill/.env
-RUN echo "ALLOWED_HOSTS=$ALLOWED_HOSTS" >> /MPCAutofill/MPCAutofill/MPCAutofill/.env
-RUN echo "GAME=$GAME" >> /MPCAutofill/MPCAutofill/MPCAutofill/.env
-RUN echo "MOXFIELD_SECRET=$MOXFIELD_SECRET" >> /MPCAutofill/MPCAutofill/MPCAutofill/.env
+# Install gosu, make scripts executable, cleanup caches
+RUN set -eux; \
+	apt-get update && apt-get install -y --no-install-recommends gosu dos2unix; \
+    chmod -R +x ./scripts && dos2unix ./scripts/*.sh; \
+    apt-get purge -y dos2unix; \
+	rm -rf /var/lib/apt/lists/*
 
-# Make sure that all scripts are executable, and in case we
-# checked out under Windows with CRLF, convert line endings
-RUN chmod +x docker/django/*.sh && \
-    find . -type f -name "*.sh" -exec dos2unix {} \;
-
-# Let's be nice to the user and give some clear error message
-# if they missed to install any of the mandatory files.
-RUN ./docker/django/check_client_secrets.sh && \
-    ./docker/django/check_drives.sh
-
-# Create a non-root user and add permission to access the /MPCAutofill folder
-RUN adduser -u 5678 --disabled-password --gecos "" mpcautofill && \
-    chown -R mpcautofill /MPCAutofill
-USER mpcautofill
-
-# Place environment file if one does not already exist
-RUN ./docker/django/copy_env_file.sh
-
-# Prepare folder for static files (create now as user for permissions)
-RUN mkdir -p static
-
-
-FROM builder AS webserver
-
-EXPOSE 8000
-WORKDIR /MPCAutofill/MPCAutofill
-ENTRYPOINT ["/MPCAutofill/docker/django/entrypoint.sh"]
-CMD ["gunicorn", "MPCAutofill.wsgi:application", "--bind", "0.0.0.0:8000"]
-
-FROM builder AS worker
-
-WORKDIR /MPCAutofill/MPCAutofill
-ENTRYPOINT ["/MPCAutofill/docker/django/entrypoint.sh"]
-CMD ["python3", "manage.py", "qcluster"]
+###
+# * Initialization Logic
+#   * pre-run.sh: Setup non-root user, run basic pre-flight checks, run one of the following as non-root user:
+#       - entrypoint.sh: (APP_RUN_MODE="server") Update data, run CMD below or as defined in docker-compose.
+#       - worker.entrypoint.sh: (APP_RUN_MODE="worker") Run Django Q2 cluster.
+###
+ENTRYPOINT ["./scripts/pre-run.sh"]
+CMD ["gunicorn", "MPCAutofill.wsgi:application", "--bind=0.0.0.0:8000", "--workers=8", "--timeout=60", "--access-logfile=-", "--error-logfile=-", "--log-level=info", "2>&1"]

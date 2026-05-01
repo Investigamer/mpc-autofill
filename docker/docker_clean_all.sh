@@ -4,8 +4,8 @@
 # Completely clean up the docker environment.
 
 # Remove all containers
-docker rm -f $(docker ps -a -q)
+docker rm -f "$(docker ps -a -q)"
 # Remove all volumes
-docker volume rm $(docker volume ls -q)
+docker volume rm "$(docker volume ls -q)"
 # Remove all images
-docker rmi -f $(docker images -a -q)
+docker rmi -f "$(docker images -a -q)"

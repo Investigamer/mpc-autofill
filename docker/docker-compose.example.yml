@@ -7,6 +7,7 @@
 #     and a "logs" directory.
 #     - Copy /MPCAutofill/config/user.example.toml -> ./mpcautofill/config/user.toml
 #     - Copy /frontend/.env.dist -> ./mpcautofill/.env.local
+#     - Place your "client_secrets.json" provided by Google Drive API in ./mpcautofill/config
 #   2) Update both .env.local and user.toml to your liking. They are explained in detail
 #     in each respective file.
 #   3) Copy this file to ./mpcautofill/docker-compose.yml, make any changes necessary.

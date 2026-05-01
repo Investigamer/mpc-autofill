@@ -118,7 +118,8 @@ SERVICE_ACC_FILENAME = "client_secrets.json"
 def find_or_create_google_drive_service() -> Resource:
     if (service := getattr(thread_local, "google_drive_service", None)) is None:
         creds = ServiceAccountCredentials.from_json_keyfile_name(
-            str(Path(os.path.abspath(__file__)).parent.parent.parent / SERVICE_ACC_FILENAME), scopes=SCOPES
+            # Todo: Use pathing from django settings?
+            str(Path(os.path.abspath(__file__)).parent.parent.parent / "config" / SERVICE_ACC_FILENAME), scopes=SCOPES
         )
         service = build("drive", "v3", credentials=creds)
         thread_local.google_drive_service = service

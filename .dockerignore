@@ -1,0 +1,17 @@
+# Python
+**/__pycache__
+**/.venv
+
+# Version control
+.git
+.github
+
+# Non-docker tooling
+.run
+desktop-tool
+
+# Environment config
+MPCAutofill/config
+!MPCAutofill/config/drives.example.csv
+!MPCAutofill/config/user.example.toml
+!MPCAutofill/config/default.toml

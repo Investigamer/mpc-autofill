@@ -151,6 +151,12 @@ cython_debug/
 MPCAutofill/card_db.db
 MPCAutofill/build
 MPCAutofill/cards
+MPCAutofill/config/**/*
+!MPCAutofill/config/drives.example.csv
+!MPCAutofill/config/drives.example.toml
+!MPCAutofill/config/user.example.toml
+!MPCAutofill/config/default.toml
+MPCAutofill/logs
 MPCAutofill/credentials.json
 MPCAutofill/ignored
 */token.pickle
@@ -160,7 +166,6 @@ MPCAutofill/ignored
 ga_settings.py
 bootstrap.min.css
 jquery.ui.touch-punch.js
-MPCAutofill/client_secrets.json
 desktop-tool/client_secrets.json
 **/static/js
 staticroot

@@ -19,6 +19,8 @@ services:
   mpcautofill-backend:
     image: investigamer/mpcautofill-backend:latest
     container_name: mpcautofill-backend
+    # * REQUIRED: Do NOT change hostname
+    hostname: mpcautofill-backend
     restart: unless-stopped
     depends_on:
       - postgres
@@ -110,21 +112,23 @@ services:
   postgres:
     image: postgres:15.0-alpine
     container_name: postgres
+    # * REQUIRED: Do NOT change hostname
+    hostname: postgres
     restart: unless-stopped
     environment:
       # * REQUIRED: Initial DB name, username, and password of the postgres instance.
       #     Ensure DATABASE config values in mpcautofill-backend/worker matches this.
-      - POSTGRES_DB=mpcautofill
-      - POSTGRES_USER=mpcautofill
-      - POSTGRES_PASSWORD=mpcautofill
+      POSTGRES_DB: mpcautofill
+      POSTGRES_USER: mpcautofill
+      POSTGRES_PASSWORD: mpcautofill
       # * Optional: Some suggested optimization tweaks, can be modified
       #     based on the resources available. See Postgres docs for more info,
       #     or remove for default behavior.
-      - POSTGRES_SHARED_BUFFERS=2GB
-      - POSTGRES_MAINTENANCE_WORK_MEM=400MB
-      - POSTGRES_EFFECTIVE_CACHE_SIZE=4GB
-      - POSTGRES_WORK_MEM=13MB
-      - POSTGRES_MAX_CONNECTIONS=150
+      POSTGRES_SHARED_BUFFERS: 2GB
+      POSTGRES_MAINTENANCE_WORK_MEM: 400MB
+      POSTGRES_EFFECTIVE_CACHE_SIZE: 4GB
+      POSTGRES_WORK_MEM: 13MB
+      POSTGRES_MAX_CONNECTIONS: 150
     ports:
       # * Optional: If you want to expose to local machine.
       - "5432:5432"
@@ -135,14 +139,16 @@ services:
   elasticsearch:
     image: elasticsearch:7.14.1
     container_name: elasticsearch
+    # * REQUIRED: Do NOT change hostname
+    hostname: elasticsearch
     restart: unless-stopped
     environment:
-      - discovery.type=single-node
-      - logger.level=WARN
+      discovery.type: single-node
+      logger.level: WARN
       # Optional: JVM heap size. If you do use this, set container memory limit with
-      - "ES_JAVA_OPTS=-Xms2048m -Xmx2048m"
+      ES_JAVA_OPTS: "-Xms2048m -Xmx2048m"
       # Recommended but not required.
-      - MAX_OPEN_FILES=65536
+      MAX_OPEN_FILES: 65536
     deploy:
       resources:
         # Optional: Memory limit should be about twice the JVM heap size.

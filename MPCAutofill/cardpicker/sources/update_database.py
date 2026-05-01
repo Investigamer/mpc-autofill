@@ -212,7 +212,7 @@ def update_database_for_source(source: Source, source_type: Type[SourceType], ro
     bulk_sync_objects(source=source, cards=cards)
 
 
-def update_database(source_key: Optional[str] = None) -> None:
+def update_database(sources: Optional[list[str]] = None, is_forced: bool = False) -> bool:
     """
     Update the contents of the database against the configured sources.
     If `source_key` is specified, only update that source; otherwise, update all sources.
@@ -220,38 +220,69 @@ def update_database(source_key: Optional[str] = None) -> None:
 
     # try to work around https://github.com/googleapis/google-api-python-client/issues/2186
     socket.setdefaulttimeout(15 * 60)
+    collected = []
     tags = Tags()
-    if source_key:
-        try:
-            source = Source.objects.get(key=source_key)
-            source_type = SourceTypeChoices.get_source_type(SourceTypeChoices[source.source_type])
-            if (root_folder := source_type.get_all_folders([source])[source.key]) is not None:
-                update_database_for_source(source=source, source_type=source_type, root_folder=root_folder, tags=tags)
-        except Source.DoesNotExist:
+    if sources is not None:
+        invalid = []
+
+        # Collect only the specified sources, if they are valid
+        print("Collecting specified sources from the database ...")
+        for source_key in sources:
+            try:
+                _source = Source.objects.get(key=source_key)
+                collected.append(_source)
+            except Source.DoesNotExist:
+                invalid.append(source_key)
+        if invalid:
+            invalid_list = ", ".join(f"{TEXT_BOLD}{invalid}{TEXT_END}")
+            existing_sources = ', '.join([f'{TEXT_BOLD}{x.key}{TEXT_END}' for x in Source.objects.all()])
             print(
-                f"Invalid source specified: {TEXT_BOLD}{source_key}{TEXT_END}"
-                f"\nYou may specify one of the following sources: "
-                f"{', '.join([f'{TEXT_BOLD}{x.key}{TEXT_END}' for x in Source.objects.all()])}"
+                f"SKIPPING these invalid sources: {invalid_list}\n"
+                f"You may specify one of the following sources: {existing_sources}"
             )
-            exit(-1)
+
     else:
-        print("Updating the database for all sources.")
-        sources = sorted(Source.objects.all(), key=lambda x: x.source_type)
-        for source_type_name, grouped_sources_iterable in groupby(sources, lambda x: x.source_type):
-            grouped_sources = list(grouped_sources_iterable)
-            source_type = SourceTypeChoices.get_source_type(SourceTypeChoices[source_type_name])
-            folders = source_type.get_all_folders(grouped_sources)
-            print(
-                f"Identified the following sources of type "
-                f"{TEXT_BOLD}{SourceTypeChoices[source_type_name].label}{TEXT_END}: "
-                f"{', '.join([f'{TEXT_BOLD}{x.name}{TEXT_END}' for x in grouped_sources])}\n"
-            )
-            for grouped_source in grouped_sources:
-                if (root_folder := folders[grouped_source.key]) is not None:
-                    update_database_for_source(
-                        source=grouped_source, source_type=source_type, root_folder=root_folder, tags=tags
-                    )
-                    print("")
+
+        # Collect all sources
+        print("Collecting sources from the database ...")
+        collected = Source.objects.all()
+
+    collected = sorted(collected, key=lambda x: x.source_type)
+    for source_type_name, grouped_sources_iterable in groupby(collected, lambda x: x.source_type):
+        source_type_choice = SourceTypeChoices[source_type_name]
+
+        # Check if we're skipping any sources
+        _sources: list[Source] = list(grouped_sources_iterable)
+        if is_forced:
+            grouped_sources, paused_sources = _sources, []
+        else:
+            grouped_sources = [n for n in _sources if not n.is_paused]
+            paused_sources = [n for n in _sources if n.is_paused]
+
+        # Alert the user what we found
+        if grouped_sources:
+            _update_list = ", ".join([x.name for x in grouped_sources])
+            _source_type_label = f"{TEXT_BOLD}{source_type_choice.label}{TEXT_END}"
+            print(f"Identified the following {_source_type_label} sources to update: {_update_list}")
+        if paused_sources:
+            _paused_list = ", ".join([x.name for x in paused_sources])
+            print(f"Skipping the following paused sources: {_paused_list}")
+        if not grouped_sources:
+            print('There are no sources to update at this time.')
+            continue
+
+        # Get folders for each source
+        source_type = SourceTypeChoices.get_source_type(source_type_choice)
+        folders = source_type.get_all_folders(grouped_sources)
+        for grouped_source in grouped_sources:
+            if (root_folder := folders[grouped_source.key]) is not None:
+                update_database_for_source(
+                    source=grouped_source,
+                    source_type=source_type,
+                    root_folder=root_folder,
+                    tags=tags)
+                print("")
+    return True
 
 
 __all__ = ["update_database"]

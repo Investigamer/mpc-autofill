@@ -4,10 +4,9 @@ from urllib.parse import parse_qs, urlparse
 
 import ratelimit
 
-from django.conf import settings
-
+from cardpicker.constants import SecretKeys
 from cardpicker.integrations.game.base import GameIntegration, ImportSite
-from cardpicker.models import DFCPair
+from cardpicker.models import DFCPair, SiteSecret
 from cardpicker.utils import get_json_endpoint_rate_limited
 
 # region import sites
@@ -156,7 +155,11 @@ class Moxfield(ImportSite):
         path = urlparse(url).path
         deck_id = path.split("/")[-1]
         response = cls.request(
-            path=f"v2/decks/all/{deck_id}", netloc="api.moxfield.com", headers={"User-Agent": settings.MOXFIELD_SECRET}
+            path=f"v2/decks/all/{deck_id}",
+            netloc="api.moxfield.com",
+            headers={
+                "User-Agent": SiteSecret.get_secret_or_none(SecretKeys.MOXFIELD_SECRET) or ""
+            }
         )
         response_json = response.json()
         card_list = ""
@@ -298,6 +301,7 @@ class MTG(GameIntegration):
 
     @classmethod
     def get_import_sites(cls) -> list[Type[ImportSite]]:
+        moxfield_secret = SiteSecret.get_secret_or_none(SecretKeys.MOXFIELD_SECRET)
         return [
             Aetherhub,
             Archidekt,
@@ -305,7 +309,7 @@ class MTG(GameIntegration):
             Deckstats,
             MagicVille,
             ManaStack,
-            *([Moxfield] if settings.MOXFIELD_SECRET else []),
+            *([Moxfield] if moxfield_secret else []),
             MTGGoldfish,
             Scryfall,
             TappedOut,

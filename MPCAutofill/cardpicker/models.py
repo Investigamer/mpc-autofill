@@ -2,13 +2,16 @@ import itertools
 import uuid
 from collections import defaultdict
 from datetime import datetime
+from functools import cached_property, lru_cache
 from typing import Any, Optional
 
+from bulk_sync import bulk_sync
 from django.contrib.auth.models import User
 from django.contrib.postgres.fields import ArrayField
 from django.db import connection, models, transaction
 from django.utils import dateformat, timezone
 from django.utils.translation import gettext_lazy
+from encrypted_fields import EncryptedTextField
 
 from cardpicker.constants import DATE_FORMAT
 from cardpicker.schema_types import Card as SerialisedCard
@@ -50,7 +53,12 @@ class Source(models.Model):
     )
     external_link = models.CharField(max_length=200, blank=True, null=True)
     description = models.CharField(max_length=400, blank=True)
-    ordinal = models.IntegerField(default=0)  # TODO: why is this not unique?
+    ordinal = models.PositiveIntegerField(default=0, db_index=True)
+    is_paused = models.BooleanField(default=False, verbose_name="Paused")
+    is_public = models.BooleanField(default=False, verbose_name="Public")
+
+    class Meta:
+        ordering = ["ordinal"]
 
     def __str__(self) -> str:
         (qty_total, qty_cards, qty_cardbacks, qty_tokens, _) = self.count()
@@ -59,30 +67,107 @@ class Source(models.Model):
             f"[{qty_total} total: {qty_cards} cards, {qty_cardbacks} cardbacks, {qty_tokens} tokens]"
         )
 
-    def count(self) -> tuple[str, str, str, str, float]:
-        # return the number of cards that this Source created, and the Source's average DPI
-        qty_cards = Card.objects.filter(source=self).filter(card_type=CardTypes.CARD).count()
-        qty_cardbacks = Card.objects.filter(source=self).filter(card_type=CardTypes.CARDBACK).count()
-        qty_tokens = Card.objects.filter(source=self).filter(card_type=CardTypes.TOKEN).count()
-        qty_all = qty_cards + qty_cardbacks + qty_tokens
+    """ Class Methods """
 
-        # if this source has any cards/cardbacks/tokens, average the dpi of all of their things
-        avg_dpi = 0
-        if qty_all > 0:
-            avg_dpi = int(
-                (Card.objects.filter(source=self).aggregate(models.Sum("dpi"))["dpi__sum"] if qty_cards > 0 else 0)
-                / qty_all
+    @classmethod
+    def sync_ordinals(cls) -> None:
+        """Rewrites ordinals across all sources in their current order, incrementing from 1."""
+        objects_to_sync = []
+        for i, obj in enumerate(cls.objects.order_by("-ordinal"), start=1):
+            obj.ordinal = i
+            objects_to_sync.append(obj)
+        bulk_sync(new_models=objects_to_sync, key_fields=("key",), filters=None, db_class=cls)
+
+    @classmethod
+    def get_next_ordinal(cls) -> int:
+        """Returns an integer value equal to the current highest `ordinal` value in the Source model plus 1."""
+        if cls.objects.count() == 0:
+            return 1
+        return cls.objects.order_by("-ordinal").first().ordinal + 1
+
+    """ Computed Properties """
+
+    @cached_property
+    def last_active(self) -> datetime:
+        return Card.objects.order_by('-date').first().date_modified
+
+    @cached_property
+    def source_label(self) -> str:
+        """Return the human-readable label for the source type."""
+        return str(SourceTypeChoices[self.source_type].label)
+
+    @cached_property
+    def qty_cards(self) -> int:
+        """Returns the number of card images provided by this source."""
+        return Card.objects.filter(source=self).filter(card_type=CardTypes.CARD).count()
+
+    @cached_property
+    def qty_cardbacks(self) -> int:
+        """Returns the number of cardback images provided by this source."""
+        return Card.objects.filter(source=self).filter(card_type=CardTypes.CARDBACK).count()
+
+    @cached_property
+    def qty_tokens(self) -> int:
+        """Returns the number of token images provided by this source."""
+        return Card.objects.filter(source=self).filter(card_type=CardTypes.TOKEN).count()
+
+    @cached_property
+    def qty_all(self) -> int:
+        """Returns the number of all images provided by this source."""
+        return self.qty_cards + self.qty_cardbacks + self.qty_tokens
+
+    @cached_property
+    def dpi_average(self) -> int:
+        """Return the average DPI of all images provided by this source."""
+        if self.qty_all > 0:
+            return int(
+                Card.objects.filter(source=self).aggregate(models.Sum("dpi"))["dpi__sum"] / self.qty_all
             )
-        return (
-            f"{qty_all :,d}",
-            f"{qty_cards :,d}",
-            f"{qty_cardbacks :,d}",
-            f"{qty_tokens :,d}",
-            avg_dpi,
-        )
+        return 0
 
-    class Meta:
-        ordering = ["ordinal"]
+    """ ORM Hooks """
+
+    def pre_save_validation(self) -> None:
+        """Perform necessary dynamic field validations, typically before saving an object."""
+
+        # Clear external link if marked private, if marked public generate one when not provided
+        if not self.is_public:
+            self.external_link = ""
+        else:
+            self.external_link = self.get_external_link()
+
+        # For a null value, get the next ordinal increment
+        if self.ordinal in [0, None, ""]:
+            self.ordinal = Source.get_next_ordinal()
+
+    def save(self, *args, **kwargs):
+        """Hook the process of saving new objects or updated objects to make changes to
+            default behavior when necessary.
+
+        Notes:
+            Is NOT automatically called when an object is saved during bulk actions like `bulk_sync`.
+        """
+        self.pre_save_validation()
+        super().save(*args, **kwargs)
+
+    """ Methods """
+
+    def get_external_link(self) -> str:
+        """Returns the external URL of this source, or an empty string if the SourceType isn't implemented."""
+        if self.source_type == SourceTypeChoices.GOOGLE_DRIVE:
+            return f"https://drive.google.com/open?id={self.identifier}"
+        # Todo: Implement for other source types
+        return ""
+
+    def count(self) -> tuple[str, str, str, str, float]:
+        """Returns the number of cards that this Source created and the Source's average DPI."""
+        return (
+            str(self.qty_all),
+            str(self.qty_cards),
+            str(self.qty_cardbacks),
+            str(self.qty_tokens),
+            self.dpi_average
+        )
 
     def serialise(self) -> SerialisedSource:
         # note: `identifier` should not be exposed here.
@@ -193,8 +278,8 @@ class Card(models.Model):
     dpi = models.IntegerField(default=0)
     searchq = models.CharField(max_length=200)
     extension = models.CharField(max_length=200)
-    date_created = models.DateTimeField(default=datetime.now)
-    date_modified = models.DateTimeField(default=datetime.now)
+    date_created = models.DateTimeField(default=timezone.now)
+    date_modified = models.DateTimeField(default=timezone.now)
     size = models.IntegerField()
     tags = ArrayField(models.CharField(max_length=20), default=list, blank=True)  # null=True is just for admin panel
     language = models.CharField(max_length=5)
@@ -418,6 +503,56 @@ class ProjectMember(models.Model):
         }
 
 
+class SiteSecret(models.Model):
+    """Model for storing encrypted site secrets.
+
+    Notes:
+        If SECRET_KEY or SALT_KEY changes, values in this table will become inaccessible and must be reingested.
+        Should be used for sensitive and generally transient data.
+    """
+    key = models.CharField(max_length=50, unique=True)
+    value = EncryptedTextField()
+
+    class Meta:
+        verbose_name = "Site Secret"
+        verbose_name_plural = "Site Secrets"
+
+    @classmethod
+    @lru_cache()
+    def get_secret(cls, key: str) -> str:
+        """Get secret from database.
+
+        Args:
+            key: Site secret key.
+
+        Returns:
+            str: The secret value.
+
+        Raises:
+            KeyError: If key is not in database.
+        """
+        _filtered = cls.objects.filter(key=key)
+        if _filtered.exists():
+            return _filtered.first().value
+        raise KeyError(f"SiteSecret key does not exist: {key}")
+
+    @classmethod
+    def get_secret_or_none(cls, key: str) -> Optional[str]:
+        """Get secret or None if key does not exist."""
+        try:
+            return cls.get_secret(key)
+        except KeyError:
+            return None
+
+    @classmethod
+    def set_secret(cls, key: str, value: str):
+        """Set site secret."""
+        _item, _created = cls.objects.update_or_create(
+            key=key, defaults={"value": value}
+        )
+        cls.get_secret.cache_clear()
+
+
 __all__ = [
     "Faces",
     "CardTypes",
@@ -430,4 +565,5 @@ __all__ = [
     "get_default_cardback",
     "Project",
     "ProjectMember",
+    "SiteSecret"
 ]

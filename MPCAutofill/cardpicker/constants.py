@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 import pycountry
 
 DATE_FORMAT = "jS F, Y"
@@ -11,3 +12,16 @@ EXPLORE_SEARCH_MAX_PAGE_SIZE = 100
 
 MAX_SIZE_MB = 30
 NSFW = "NSFW"
+
+@dataclass
+class SecretKeys:
+    """Recognized secret keys."""
+
+    # Moxfield Integration
+    MOXFIELD_SECRET = "MOXFIELD.SECRET"
+
+    # Patreon Integration
+    PATREON_ACCESS = "PATREON.ACCESS"
+    PATREON_REFRESH = "PATREON.REFRESH"
+    PATREON_CLIENT = "PATREON.CLIENT"
+    PATREON_SECRET = "PATREON.SECRET"

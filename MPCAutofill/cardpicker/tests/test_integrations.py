@@ -53,6 +53,7 @@ class TestMTGIntegration:
 
     @pytest.fixture()
     def moxfield_secret_setter(self):
+        # Todo: Rework for new usage of SiteSecret for MOXFIELD_SECRET
         def _callable(moxfield_secret: Optional[str]):
             conf_settings.MOXFIELD_SECRET = moxfield_secret
 
@@ -85,6 +86,7 @@ class TestMTGIntegration:
         ],
     )
     def test_moxfield_enabled(self, moxfield_secret_setter, moxfield_secret, is_moxfield_enabled):
+        # Todo: Rework for new usage of SiteSecret for MOXFIELD_SECRET
         moxfield_secret_setter(moxfield_secret)
         import_sites = MTG.get_import_sites()
         if is_moxfield_enabled:

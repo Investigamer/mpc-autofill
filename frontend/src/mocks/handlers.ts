@@ -9,6 +9,11 @@ import {
   cardDocument4,
   cardDocument5,
   cardDocument6,
+  cardDocument7,
+  cardDocument8,
+  cardDocument9,
+  cardDocument10,
+  cardDocument11,
   localBackend,
   sourceDocument1,
   sourceDocument2,
@@ -31,10 +36,36 @@ function buildRoute(route: string) {
   return `${localBackend.url}/${(re.exec(route) ?? ["", ""])[1]}`;
 }
 
+/**
+ * Re-route ping.js favicon request to frontend for E2E tests
+ */
+export const favicon = http.get(buildRoute("favicon.ico"), async () => {
+  const image = await fetch("http://localhost:3000/favicon.ico").then((res) =>
+    res.arrayBuffer()
+  );
+  return HttpResponse.arrayBuffer(image, {
+    headers: { "content-type": "image/png" },
+  });
+});
+
 //# region source
 
 export const sourceDocumentsNoResults = http.get(buildRoute("2/sources/"), () =>
   HttpResponse.json({ results: {} }, { status: 200 })
+);
+
+export const sourceDocumentsTwoResults = http.get(
+  buildRoute("2/sources/"),
+  () =>
+    HttpResponse.json(
+      {
+        results: {
+          [sourceDocument1.pk]: sourceDocument1,
+          [sourceDocument2.pk]: sourceDocument2,
+        },
+      },
+      { status: 200 }
+    )
 );
 
 export const sourceDocumentsOneResult = http.get(buildRoute("2/sources/"), () =>
@@ -128,6 +159,37 @@ export const cardDocumentsSixResults = http.post(buildRoute("2/cards/"), () =>
     },
     { status: 200 }
   )
+);
+
+// Two sources: card1+card2 from source1, card7 from source2
+export const cardDocumentsTwoSources = http.post(buildRoute("2/cards/"), () =>
+  HttpResponse.json(
+    {
+      results: {
+        [cardDocument1.identifier]: cardDocument1,
+        [cardDocument2.identifier]: cardDocument2,
+        [cardDocument7.identifier]: cardDocument7,
+      },
+    },
+    { status: 200 }
+  )
+);
+
+// Cards with canonicalCard data for CanonicalCardFilter tests
+export const cardDocumentsWithCanonicalCards = http.post(
+  buildRoute("2/cards/"),
+  () =>
+    HttpResponse.json(
+      {
+        results: {
+          [cardDocument8.identifier]: cardDocument8,
+          [cardDocument9.identifier]: cardDocument9,
+          [cardDocument10.identifier]: cardDocument10,
+          [cardDocument11.identifier]: cardDocument11,
+        },
+      },
+      { status: 200 }
+    )
 );
 
 export const cardDocumentsServerError = http.post(buildRoute("2/cards/"), () =>
@@ -240,6 +302,51 @@ export const searchResultsThreeResults = http.post(
               cardDocument1.identifier,
               cardDocument2.identifier,
               cardDocument3.identifier,
+            ],
+            CARDBACK: [],
+            TOKEN: [],
+          },
+        },
+      },
+      { status: 200 }
+    )
+);
+
+// Two sources: card1+card2 from source1, card7 from source2
+export const searchResultsTwoSources = http.post(
+  buildRoute("2/editorSearch/"),
+  () =>
+    HttpResponse.json(
+      {
+        results: {
+          "my search query": {
+            CARD: [
+              cardDocument1.identifier,
+              cardDocument2.identifier,
+              cardDocument7.identifier,
+            ],
+            CARDBACK: [],
+            TOKEN: [],
+          },
+        },
+      },
+      { status: 200 }
+    )
+);
+
+// Cards with canonicalCard data for CanonicalCardFilter tests
+export const searchResultsWithCanonicalCards = http.post(
+  buildRoute("2/editorSearch/"),
+  () =>
+    HttpResponse.json(
+      {
+        results: {
+          "my search query": {
+            CARD: [
+              cardDocument8.identifier,
+              cardDocument9.identifier,
+              cardDocument10.identifier,
+              cardDocument11.identifier,
             ],
             CARDBACK: [],
             TOKEN: [],
@@ -481,12 +588,19 @@ export const newCardsFirstPageNoResults = http.get(
 );
 
 export const newCardsPageForSource1 = http.get(
-  buildRoute(`2/newCardsPage?source=${sourceDocument1.key}&page=2`),
-  () =>
-    HttpResponse.json(
-      { cards: [cardDocument3, cardDocument4] },
-      { status: 200 }
-    )
+  buildRoute(`2/newCardsPage`),
+  ({ request }) => {
+    const url = new URL(request.url);
+    const source = url.searchParams.get("source");
+    const page = url.searchParams.get("page");
+    if (source === sourceDocument1.key && page === "2") {
+      return HttpResponse.json(
+        { cards: [cardDocument3, cardDocument4] },
+        { status: 200 }
+      );
+    }
+    return HttpResponse.json(null, { status: 404 });
+  }
 );
 
 export const newCardsFirstPageServerError = http.get(
@@ -544,6 +658,7 @@ export const searchEngineHealthy = http.get(
 //# region presets
 
 export const defaultHandlers = [
+  favicon,
   sourceDocumentsNoResults,
   cardDocumentsNoResults,
   cardbacksNoResults,

@@ -1,13 +1,7 @@
-# name: TestMTGIntegration.test_valid_url[aetherhub]
+# serializer version: 1
+# name: TestMTGIntegration.test_valid_url[archidekt]
   Counter({
-    '1 Delver of Secrets': 1,
-    '3 Past in Flames': 1,
-    '4 Brainstorm': 1,
-  })
-# ---
-# name: TestMTGIntegration.test_valid_url[aetherhub_with_www]
-  Counter({
-    '1 Delver of Secrets': 1,
+    '1 Delver of Secrets // Insectile Aberration': 1,
     '3 Past in Flames': 1,
     '4 Brainstorm': 1,
   })
@@ -33,13 +27,6 @@
     '4 Brainstorm': 1,
   })
 # ---
-# name: TestMTGIntegration.test_valid_url[archidekt]
-  Counter({
-    '1 Delver of Secrets // Insectile Aberration': 1,
-    '3 Past in Flames': 1,
-    '4 Brainstorm': 1,
-  })
-# ---
 # name: TestMTGIntegration.test_valid_url[cubecobra]
   Counter({
     'Brainstorm': 4,
@@ -52,20 +39,6 @@
     'Brainstorm': 4,
     'Delver of Secrets': 1,
     'Past in Flames': 3,
-  })
-# ---
-# name: TestMTGIntegration.test_valid_url[deckstats]
-  Counter({
-    '1 Delver of Secrets // Insectile Aberration': 1,
-    '3 Past in Flames': 1,
-    '4 Brainstorm': 1,
-  })
-# ---
-# name: TestMTGIntegration.test_valid_url[deckstats_with_www]
-  Counter({
-    '1 Delver of Secrets // Insectile Aberration': 1,
-    '3 Past in Flames': 1,
-    '4 Brainstorm': 1,
   })
 # ---
 # name: TestMTGIntegration.test_valid_url[magicville]
@@ -87,6 +60,22 @@
     '1 Delver of Secrets': 1,
     '3 Past in Flames': 1,
     '4 Brainstorm': 1,
+  })
+# ---
+# name: TestMTGIntegration.test_valid_url[moxfield]
+  Counter({
+    '1 Delver of Secrets // Insectile Aberration': 1,
+    '3 Past in Flames': 1,
+    '4 Brainstorm': 1,
+    't:Innistrad Checklist': 1,
+  })
+# ---
+# name: TestMTGIntegration.test_valid_url[moxfield_without_www]
+  Counter({
+    '1 Delver of Secrets // Insectile Aberration': 1,
+    '3 Past in Flames': 1,
+    '4 Brainstorm': 1,
+    't:Innistrad Checklist': 1,
   })
 # ---
 # name: TestMTGIntegration.test_valid_url[scryfall]
@@ -111,36 +100,6 @@
   })
 # ---
 # name: TestMTGIntegration.test_valid_url[tappedout_with_www]
-  Counter({
-    '1 Delver of Secrets': 1,
-    '3 Past in Flames': 1,
-    '4 Brainstorm': 1,
-  })
-# ---
-# name: TestMTGIntegration.test_valid_url[moxfield]
-  Counter({
-    '1 Delver of Secrets // Insectile Aberration': 1,
-    '3 Past in Flames': 1,
-    '4 Brainstorm': 1,
-    't:Innistrad Checklist': 1,
-  })
-# ---
-# name: TestMTGIntegration.test_valid_url[moxfield_without_www]
-  Counter({
-    '1 Delver of Secrets // Insectile Aberration': 1,
-    '3 Past in Flames': 1,
-    '4 Brainstorm': 1,
-    't:Innistrad Checklist': 1,
-  })
-# ---
-# name: TestMTGIntegration.test_valid_url[mtggoldfish]
-  Counter({
-    '1 Delver of Secrets': 1,
-    '3 Past in Flames': 1,
-    '4 Brainstorm': 1,
-  })
-# ---
-# name: TestMTGIntegration.test_valid_url[mtggoldfish_without_www]
   Counter({
     '1 Delver of Secrets': 1,
     '3 Past in Flames': 1,

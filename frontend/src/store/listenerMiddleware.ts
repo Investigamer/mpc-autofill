@@ -1,7 +1,3 @@
-/**
- * Retrieved from https://redux-toolkit.js.org/api/createListenerMiddleware
- */
-
 import {
   addListener,
   createListenerMiddleware,
@@ -9,16 +5,31 @@ import {
 } from "@reduxjs/toolkit";
 
 import { Back, Front, QueryTags } from "@/common/constants";
-import { getLocalStorageSearchSettings } from "@/common/cookies";
+import {
+  getLocalStorageSearchSettings,
+  setLocalStorageFavorites,
+} from "@/common/cookies";
 import { Faces } from "@/common/types";
 import { api } from "@/store/api";
 import {
   clearURL,
-  selectBackendConfigured,
+  selectRemoteBackendConfigured,
   setURL,
 } from "@/store/slices/backendSlice";
-import { fetchCardbacks, selectCardbacks } from "@/store/slices/cardbackSlice";
+import {
+  fetchCardbacks,
+  fetchCardbacksAndReportError,
+  selectCardbacks,
+} from "@/store/slices/cardbackSlice";
 import { fetchCardDocumentsAndReportError } from "@/store/slices/cardDocumentsSlice";
+import {
+  clearFavoriteRenders,
+  removeFavoriteRender,
+  selectFavoriteIdentifiersSet,
+  setAllFavoriteRenders,
+  setFavoriteRender,
+  toggleFavoriteRender,
+} from "@/store/slices/favoritesSlice";
 import { recordInvalidIdentifier } from "@/store/slices/invalidIdentifiersSlice";
 import {
   addMembers,
@@ -33,7 +44,6 @@ import {
   selectSearchResultsForQueryOrDefault,
 } from "@/store/slices/searchResultsSlice";
 import {
-  selectSearchSettingsSourcesValid,
   setFilterSettings,
   setSearchTypeSettings,
   setSourceSettings,
@@ -45,6 +55,37 @@ import {
 } from "@/store/slices/sourceDocumentsSlice";
 
 import type { AppDispatch, RootState } from "./store";
+
+/**
+ * Helper function to select the first favorited card from results, or the first card if none are favorited.
+ */
+const selectFirstFavoritedOrFirst = (
+  results: string[],
+  favoriteIdentifiersSet: Set<string>
+): string | undefined => {
+  const firstFavorite = results.find((id) => favoriteIdentifiersSet.has(id));
+  return firstFavorite ?? results[0];
+};
+
+export const recalculateSearchResults = async (
+  state: RootState,
+  dispatch: AppDispatch,
+  refreshCardbacks: boolean
+) => {
+  dispatch(clearSearchResults());
+  await fetchCardDocumentsAndReportError(dispatch, {
+    refreshCardbacks,
+  });
+};
+
+export const fetchSources = async (state: RootState, dispatch: AppDispatch) => {
+  const isRemoteBackendConfigured = selectRemoteBackendConfigured(state);
+  if (isRemoteBackendConfigured) {
+    await fetchSourceDocumentsAndReportError(dispatch).then(() =>
+      fetchCardbacksAndReportError(dispatch)
+    );
+  }
+};
 
 //# region boilerplate
 
@@ -64,14 +105,11 @@ const addAppListener = addListener.withTypes<RootState, AppDispatch>();
 startAppListening({
   actionCreator: setURL,
   /**
-   * Fetch sources whenever the backend configuration is set.
+   * Fetch sources and load favorites from localStorage whenever the backend configuration is set.
    */
   effect: async (action, { getState, dispatch }) => {
     const state = getState();
-    const isBackendConfigured = selectBackendConfigured(state);
-    if (isBackendConfigured) {
-      await fetchSourceDocumentsAndReportError(dispatch);
-    }
+    fetchSources(state, dispatch);
   },
 });
 
@@ -114,14 +152,13 @@ startAppListening({
   /**
    * Recalculate search results whenever search settings change.
    */
-  effect: async (action, { getState, dispatch }) => {
+  effect: async (action, { getState, dispatch, getOriginalState }) => {
     const state = getState();
-    const isBackendConfigured = selectBackendConfigured(state);
-    const searchSettingsSourcesValid = selectSearchSettingsSourcesValid(state);
-    if (isBackendConfigured && searchSettingsSourcesValid) {
-      dispatch(clearSearchResults());
-      await fetchCardDocumentsAndReportError(dispatch);
-    }
+    const originalState = getOriginalState();
+    const refreshCardbacks =
+      state.searchSettings.searchTypeSettings.filterCardbacks ||
+      originalState.searchSettings.searchTypeSettings.filterCardbacks;
+    await recalculateSearchResults(state, dispatch, refreshCardbacks);
   },
 });
 
@@ -130,7 +167,8 @@ startAppListening({
   /**
    * Fetch card documents whenever new members are added to the project or search results are cleared.
    */
-  effect: async (action, { dispatch }) => {
+  effect: async (action, { dispatch, getState }) => {
+    const state = getState();
     await fetchCardDocumentsAndReportError(dispatch);
   },
 });
@@ -145,6 +183,7 @@ startAppListening({
    */
   effect: async (action, { dispatch, getState }) => {
     const state = getState();
+    const favoriteIdentifiersSet = selectFavoriteIdentifiersSet(state);
     const currentCardback = selectProjectCardback(state);
     const cardbacks = selectCardbacks(state);
 
@@ -153,7 +192,10 @@ startAppListening({
       newCardback = undefined;
     }
     if (newCardback == null && cardbacks.length > 0) {
-      newCardback = cardbacks[0];
+      newCardback = selectFirstFavoritedOrFirst(
+        cardbacks,
+        favoriteIdentifiersSet
+      );
     }
 
     if (newCardback != currentCardback) {
@@ -189,6 +231,7 @@ startAppListening({
     });
 
     const state = getState();
+    const favoriteIdentifiersSet = selectFavoriteIdentifiersSet(state);
 
     const { slots }: { slots: Array<[Faces, number]> } = action.payload;
     for (const [_, [face, slot]] of slots.entries()) {
@@ -202,7 +245,10 @@ startAppListening({
         ) ?? [];
       const newSelectedImage =
         searchQuery?.query != null
-          ? searchResultsForQueryOrDefault[0]
+          ? selectFirstFavoritedOrFirst(
+              searchResultsForQueryOrDefault,
+              favoriteIdentifiersSet
+            )
           : undefined;
       if (newSelectedImage != null) {
         dispatch(
@@ -217,7 +263,7 @@ startAppListening({
 });
 
 startAppListening({
-  actionCreator: fetchSearchResults.fulfilled,
+  matcher: isAnyOf(fetchSearchResults.fulfilled, fetchCardbacks.fulfilled),
   /**
    * Whenever search results change, this listener will inspect each card slot
    * and ensure that their selected images are valid.
@@ -225,6 +271,7 @@ startAppListening({
   effect: async (action, { dispatch, getState }) => {
     const state = getState();
     const projectCardback = selectProjectCardback(state);
+    const favoriteIdentifiersSet = selectFavoriteIdentifiersSet(state);
     for (const [slot, slotProjectMember] of state.project.members.entries()) {
       for (const face of [Front, Back]) {
         const projectMember = slotProjectMember[face];
@@ -258,13 +305,16 @@ startAppListening({
               mutatedSelectedImage = undefined;
             }
 
-            // If no image is selected and there are search results, select the first image in search results
+            // If no image is selected and there are search results, select the first favorited image or the first image
             if (
               searchResultsForQueryOrDefault.length > 0 &&
               mutatedSelectedImage == null
             ) {
               if (searchQuery?.query != null) {
-                mutatedSelectedImage = searchResultsForQueryOrDefault[0];
+                mutatedSelectedImage = selectFirstFavoritedOrFirst(
+                  searchResultsForQueryOrDefault,
+                  favoriteIdentifiersSet
+                );
               } else if (face === Back && projectCardback != null) {
                 mutatedSelectedImage = projectCardback;
               }
@@ -280,6 +330,23 @@ startAppListening({
         }
       }
     }
+  },
+});
+
+startAppListening({
+  matcher: isAnyOf(
+    setFavoriteRender,
+    removeFavoriteRender,
+    toggleFavoriteRender,
+    clearFavoriteRenders,
+    setAllFavoriteRenders
+  ),
+  /**
+   * Save favorites to localStorage whenever they change.
+   */
+  effect: async (action, { getState }) => {
+    const state = getState();
+    setLocalStorageFavorites(state.favorites.favoriteRenders);
   },
 });
 

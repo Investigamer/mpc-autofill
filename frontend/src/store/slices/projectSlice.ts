@@ -6,8 +6,10 @@ import { createSelector, PayloadAction } from "@reduxjs/toolkit";
 
 import { Card, Cardback } from "@/common/constants";
 import { Back, Front, ProjectMaxSize } from "@/common/constants";
-import { processPrefix } from "@/common/processing";
+import { processPrefix, toSearchable } from "@/common/processing";
+import { SourceType } from "@/common/schema_types";
 import {
+  CardDocuments,
   createAppSlice,
   Faces,
   Project,
@@ -362,14 +364,12 @@ export const selectUniqueCardIdentifiers = createSelector(
         .flatMap((slotProjectMembers) =>
           [Front, Back].flatMap((face) => {
             const searchQuery = slotProjectMembers[face]?.query;
-            return searchQuery?.query != null &&
-              (
-                (searchResults[searchQuery.query] ?? {})[
-                  searchQuery.cardType
-                ] ?? []
-              ).length > 0
-              ? (searchResults[searchQuery.query] ?? {})[searchQuery.cardType]
-              : [];
+
+            if (!searchQuery?.query || !searchResults[searchQuery.query]) {
+              return [];
+            }
+
+            return searchResults[searchQuery.query][searchQuery.cardType] ?? [];
           })
         )
         .concat(cardbacks)
@@ -460,8 +460,65 @@ export const selectAllSelectedProjectMembersHaveTheSameQuery = createSelector(
   }
 );
 
+export const selectAnySelectedProjectMembersMatchQuery = createSelector(
+  (state: RootState, slots: Slots, face: Faces, query: string | null) =>
+    state.project.members,
+  (state: RootState, slots: Slots, face: Faces, query: string | null) =>
+    [...new Set(slots.map(([face, slotNumber]) => slotNumber))].sort(
+      (a, b) => a - b
+    ),
+  (state: RootState, slots: Slots, face: Faces, query: string | null) => face,
+  (state: RootState, slots: Slots, face: Faces, query: string | null) => query,
+  (members, distinctSlotNumbers, face, query) => {
+    if (query === null) {
+      return false;
+    }
+    const projectMembers = distinctSlotNumbers.map((slot) =>
+      getProjectMember(members, face, slot)
+    );
+    return projectMembers.some(
+      (projectMember) =>
+        projectMember?.query?.query &&
+        toSearchable(projectMember.query.query) === toSearchable(query)
+    );
+  }
+);
+
 export const selectIsProjectEmpty = (state: RootState) =>
   selectProjectSize(state) == 0;
+
+const anyImagesDownloadable = (
+  projectMembers: Array<ProjectMember | null>,
+  cardDocuments: CardDocuments
+) =>
+  projectMembers.some(
+    (member) =>
+      member?.selectedImage !== undefined &&
+      cardDocuments[member.selectedImage]?.sourceType === SourceType.GoogleDrive
+  );
+
+export const selectAnyImagesDownloadable = createSelector(
+  (state: RootState) => state.project.members,
+  (state: RootState) => state.cardDocuments.cardDocuments,
+  (state: RootState) => selectIsProjectEmpty(state),
+  (members, cardDocuments, isProjectEmpty) =>
+    !isProjectEmpty &&
+    members.some((slotMember) =>
+      anyImagesDownloadable([slotMember.front, slotMember.back], cardDocuments)
+    )
+);
+
+export const selectAnySelectedImagesDownloadable = createSelector(
+  (state: RootState, slots: Slots) => state.project.members,
+  (state: RootState, slots: Slots) => state.cardDocuments.cardDocuments,
+  (state: RootState, slots: Slots) => slots,
+  (members, cardDocuments, slots) => {
+    const projectMembers = slots.map((slot) =>
+      getProjectMember(members, ...slot)
+    );
+    return anyImagesDownloadable(projectMembers, cardDocuments);
+  }
+);
 
 export const selectProjectCardback = (state: RootState): string | undefined =>
   state.project.cardback ?? undefined;

@@ -9,8 +9,9 @@ import {
   createAppAsyncThunk,
   createAppSlice,
 } from "@/common/types";
+import { ClientSearchService } from "@/features/clientSearch/clientSearchService";
 import { APIGetCardbacks } from "@/store/api";
-import { selectBackendURL } from "@/store/slices/backendSlice";
+import { selectRemoteBackendURL } from "@/store/slices/backendSlice";
 import { selectSearchSettings } from "@/store/slices/searchSettingsSlice";
 import { setNotification } from "@/store/slices/toastsSlice";
 import { AppDispatch, RootState } from "@/store/store";
@@ -21,13 +22,22 @@ const typePrefix = "cardbacks/fetchCardbacks";
 
 export const fetchCardbacks = createAppAsyncThunk(
   typePrefix,
-  async (arg, { getState }) => {
+  async (arg, { getState, extra }) => {
     const state = getState();
-    const backendURL = selectBackendURL(state);
+    const { clientSearchService } = extra as {
+      // TODO: move this extra type into types.ts
+      clientSearchService: ClientSearchService;
+    };
+    const backendURL = selectRemoteBackendURL(state);
     const searchSettings = selectSearchSettings(state);
-    return backendURL != null
-      ? APIGetCardbacks(backendURL, searchSettings)
-      : null;
+
+    const localResults: Array<string> =
+      (await clientSearchService.searchCardbacks(searchSettings)) ?? [];
+    const remoteResults: Array<string> =
+      backendURL != null
+        ? await APIGetCardbacks(backendURL, searchSettings)
+        : [];
+    return [...(localResults ?? []), ...remoteResults];
   }
 );
 
@@ -95,6 +105,7 @@ export default cardbackSlice.reducer;
 
 const defaultEmptyCardbacks: Array<string> = [];
 export const selectCardbacks = createSelector(
+  // TODO: produces a warning in console for returning input w/ no modifications
   (state: RootState) => state.cardbacks.cardbacks,
   (cardbacks) => cardbacks ?? defaultEmptyCardbacks
 );

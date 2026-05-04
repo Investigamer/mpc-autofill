@@ -29,7 +29,7 @@
 }
 
 .mpccard-highlight {
-  z-index: 11;
+  z-index: 1;
   box-shadow: 0px 0px 3px 3px rgba(255, 255, 255, 0.6);
 }
 
@@ -38,7 +38,7 @@
 }
 
 .mpccard-hover:hover {
-  z-index: 10;
+  z-index: 1;
   box-shadow: 0 0 10px 5px rgba(255, 255, 255, 0.3);
 }
 
@@ -137,7 +137,12 @@
 }
 
 .ratio-7x5 > img {
-  transform: scale(1.088, 1.065);
+  /* Printed card height: 63mm by 88mm */
+  /* Bleed edge: 36px (each side) @ 300dpi -> 0.12 inches, converted to mm */
+  transform: scale(
+    calc((63 + 2 * 0.12 * 25.4) / 63),
+    calc((88 + 2 * 0.12 * 25.4) / 88)
+  );
 }
 
 .toggle-handle {
@@ -160,4 +165,10 @@
 
 .rotate-neg90 {
   transform: rotate(0deg);
+}
+
+/* Ensure the Google Drive Picker dialog renders above Bootstrap's offcanvas (z-index: 1045) */
+.picker-dialog-bg,
+.picker-dialog {
+  z-index: 2000 !important;
 }

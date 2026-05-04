@@ -1,5 +1,5 @@
+import styled from "@emotion/styled";
 import DropdownTreeSelect from "react-dropdown-tree-select";
-import styled from "styled-components";
 
 export const StyledDropdownTreeSelect = styled(DropdownTreeSelect)`
   .tag {
@@ -10,6 +10,9 @@ export const StyledDropdownTreeSelect = styled(DropdownTreeSelect)`
     color: #666666;
   }
 
+  .dropdown-content {
+    z-index: 2;
+  }
   .dropdown-trigger {
     border-radius: 0.25rem;
     background-color: white;
@@ -36,11 +39,11 @@ export const StyledDropdownTreeSelect = styled(DropdownTreeSelect)`
   }
 
   .toggle.collapsed::after {
-    content: "\F4FA";
+    content: "\uF4FA";
   }
 
   .toggle.expanded::after {
-    content: "\F2E6";
+    content: "\uF2E6";
   }
 
   color: black;

@@ -13,6 +13,7 @@ import {
   CardTypeSeparator,
   CSVHeaders,
   FaceSeparator,
+  FaceSeparatorRegexEscaped,
   ProjectMaxSize,
   ReversedCardTypePrefixes,
   SelectedImageSeparator,
@@ -83,6 +84,36 @@ export function processPrefix(query: string): SearchQuery {
   return { query: processQuery(query), cardType: CardTypePrefixes[""] };
 }
 
+const getPhrasesNotAllowedInIdentifiers = (): Array<string> => [
+  SelectedImageSeparator,
+  FaceSeparatorRegexEscaped,
+];
+
+const getPhrasesNotAllowedInIdentifiersNegativeLookahead = (): string =>
+  `(?!.*?(?:${getPhrasesNotAllowedInIdentifiers().join("|")})).*`;
+
+const trimLine = (line: string): string => line.replace(/\s+/g, " ").trim();
+
+/**
+ * Extract the quantity component of `line`, which follows one of these forms:
+ * * `<quantity - numeric> <query>`
+ * * `<quantity - numeric>x <query>`
+ * * `<query>` (quantity is assumed to be 1 in this case)
+ * @param line
+ * @returns Tuple of the form [quantity, remainder of the string]
+ */
+const extractQuantity = (line: string): [number, string] => {
+  const re = /^([0-9]+[xX]?\s+)?(.*)$/g;
+  const results = re.exec(trimLine(line));
+  if (results == null) {
+    return [0, ""];
+  }
+  const quantity = parseInt(
+    (results[1] ?? "1").toLowerCase().replace("x", "").trim()
+  );
+  return [quantity, results[2]];
+};
+
 /**
  * Unpack `line` into its constituents.
  *
@@ -93,29 +124,52 @@ export function processPrefix(query: string): SearchQuery {
  * If quantity is not specified, we assume a quantity of 1.
  * Specifying a back query is optional.
  * Specifying an image ID (for each face) is optional.
- *
- * (sorry for jamming this much stuff into one regex 🗿)
  */
 function unpackLine(
   line: string
 ): [number, [string, string | null] | null, [string, string | null] | null] {
-  const trimmedLine = line.replace(/\s+/g, " ").trim();
-  const re = new RegExp(
-    `^(?:([0-9]+[xX]?\\s)?(.*?)(?:${SelectedImageSeparator}([A-z0-9_\\-]*))?)?(?:(?:\\s*)${
-      "\\" + FaceSeparator
-    }(?:\\s*)(.+?)(?:${SelectedImageSeparator}([A-z0-9_\\-]*))?)?$`,
+  const [quantity, trimmedLine] = extractQuantity(line);
+
+  const [frontLine, backLine] = trimmedLine.split(FaceSeparator);
+
+  const faceLineRegex = new RegExp(
+    `^(.+?)(?:${SelectedImageSeparator}(${getPhrasesNotAllowedInIdentifiersNegativeLookahead()}))?$`,
     "gm"
   );
-  const results = re.exec(trimmedLine);
-  if (results == null) {
+  const frontLineResults = [...frontLine.matchAll(faceLineRegex)][0];
+  const backLineResults =
+    backLine !== undefined ? [...backLine.matchAll(faceLineRegex)][0] : null;
+
+  if (frontLineResults === null) {
     return [0, null, null];
   }
   return [
-    parseInt((results[1] ?? "1").toLowerCase().replace("x", "").trim()),
-    [results[2], results[3]],
-    [results[4], results[5]],
+    quantity,
+    [frontLineResults[1]?.trim(), frontLineResults[2]?.trim()],
+    backLineResults !== null
+      ? [backLineResults[1]?.trim(), backLineResults[2]?.trim()]
+      : null,
   ];
 }
+
+export const getDfcBack = (
+  query: string,
+  dfcPairs: DFCPairs,
+  fuzzySearch: boolean
+): string | null => {
+  let dfcPairMatchFront: string | null = null;
+  if (fuzzySearch) {
+    const matches = Object.keys(dfcPairs).filter((dfcPairFront) =>
+      dfcPairFront.startsWith(query)
+    );
+    if (matches.length === 1) {
+      dfcPairMatchFront = matches[0];
+    }
+  } else if (query in dfcPairs) {
+    dfcPairMatchFront = query;
+  }
+  return dfcPairMatchFront ? dfcPairs[dfcPairMatchFront] : null;
+};
 
 /**
  * Process `line` to identify the search query and the number of instances requested for each face.
@@ -149,23 +203,11 @@ export function processLine(
     backQuery = processPrefix(backRawQuery[0]);
     backSelectedImage = backRawQuery[1] ?? undefined;
   } else if (frontQuery != null && frontQuery?.query != null) {
-    // typescript isn't smart enough to know that frontQuery.query is not null, so we have to do this
-    const frontQueryQuery = frontQuery.query;
-    let dfcPairMatchFront: string | null = null;
-    if (fuzzySearch) {
-      const matches = Object.keys(dfcPairs).filter((dfcPairFront) =>
-        dfcPairFront.startsWith(frontQueryQuery)
-      );
-      if (matches.length === 1) {
-        dfcPairMatchFront = matches[0];
-      }
-    } else if (frontQueryQuery in dfcPairs) {
-      dfcPairMatchFront = frontQueryQuery;
-    }
-    if (dfcPairMatchFront != null) {
+    const dfcBackQuery = getDfcBack(frontQuery.query, dfcPairs, fuzzySearch);
+    if (dfcBackQuery != null) {
       // match to the card's DFC pair. assume the back is the same card type as the front.
       backQuery = {
-        query: dfcPairs[dfcPairMatchFront],
+        query: dfcBackQuery,
         cardType: frontQuery.cardType,
       };
     }
@@ -274,6 +316,7 @@ export function formatURL(backendURL: string, routeURL: string): string {
 }
 
 export function base64StringToBlob(base64: string): Blob {
+  // @ts-ignore // TODO: broke in TS 4 to 5 migration
   return new Blob([toByteArray(base64)]);
 }
 
@@ -313,7 +356,7 @@ export const parseCSVRowAsLine = (rawRow: CSVRow): string => {
     }`;
   }
   if ((row[CSVHeaders.backQuery] ?? "").length > 0) {
-    formattedLine += ` ${FaceSeparator} ${row[CSVHeaders.backQuery]}`;
+    formattedLine += `${FaceSeparator}${row[CSVHeaders.backQuery]}`;
     if ((row[CSVHeaders.backSelectedImage] ?? "").length > 0) {
       formattedLine += `${SelectedImageSeparator}${
         row[CSVHeaders.backSelectedImage]
@@ -326,4 +369,31 @@ export const parseCSVRowAsLine = (rawRow: CSVRow): string => {
 export const parseCSVFileAsLines = (fileContents: string): Array<string> => {
   const rows: Array<CSVRow> = parse(fileContents);
   return rows.map(parseCSVRowAsLine);
+};
+
+export const removeFileExtension = (fileName: string): string =>
+  fileName.replace(/^(.+?)(?:\..+)?$/, "$1");
+
+export const toSearchable = (inputString: string): string =>
+  sanitiseWhitespace(
+    inputString
+      .toLowerCase()
+      .replaceAll(/[\(\[].*?[\)\]]/g, "")
+      .replace("-", " ")
+      .replace(" the ", " ")
+      .replace("’", "'")
+      .replaceAll(/[!"#\$%&'\(\)\*\+,-\.\/:;<=>\?@\[\]\^_`{\|}~\/]/g, "") // remove punctuation
+      .replaceAll(/[0123456789]/g, "") // remove digits
+      .replaceAll(/^the (.*$)/g, "$1") // remove "the " at start of string
+      // remove accents - match elasticsearch `asciifolding` filter. https://stackoverflow.com/a/37511463/13021511
+      .normalize("NFD")
+      .replace(/\p{Diacritic}/gu, "")
+  );
+
+export const extractLanguage = (name: string): [string | undefined, string] => {
+  const languageRegex = /^(?:\{(.+)\} )?(.*?)$/g;
+  const results = [...name.matchAll(languageRegex)][0];
+  const languageCode: string | undefined = results[1]; // TODO: match against valid language codes here
+  const remainderOfName = results[2];
+  return [languageCode, remainderOfName];
 };

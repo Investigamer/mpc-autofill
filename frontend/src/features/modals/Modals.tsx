@@ -3,14 +3,13 @@ import React from "react";
 import { useAppDispatch, useAppSelector } from "@/common/types";
 import { MemoizedCardDetailedView } from "@/features/cardDetailedView/CardDetailedViewModal";
 import { ChangeQueryModal } from "@/features/changeQuery/ChangeQueryModal";
-import { FinishedMyProjectModal } from "@/features/export/FinishedMyProjectModal";
 import { InvalidIdentifiersModal } from "@/features/invalidIdentifiers/InvalidIdentifiersModal";
+import { PDFGeneratorModal } from "@/features/pdf/PDFGeneratorModal";
 import { SupportBackendModal } from "@/features/support/SupportBackendModal";
 import { SupportDeveloperModal } from "@/features/support/SupportDeveloperModal";
 import {
   hideModal,
-  selectModalCard,
-  selectModalSlots,
+  selectModalProps,
   selectShownModal,
 } from "@/store/slices/modalsSlice";
 
@@ -18,8 +17,7 @@ export function Modals() {
   //# region queries and hooks
 
   const dispatch = useAppDispatch();
-  const selectedImage = useAppSelector(selectModalCard);
-  const selectedSlots = useAppSelector(selectModalSlots);
+  const modalProps = useAppSelector(selectModalProps);
   const shownModal = useAppSelector(selectShownModal);
 
   //# endregion
@@ -34,24 +32,25 @@ export function Modals() {
 
   return (
     <>
-      {selectedImage != null && (
-        <MemoizedCardDetailedView
-          cardDocument={selectedImage}
-          show={shownModal === "cardDetailedView"}
-          handleClose={handleClose}
-        />
+      {modalProps !== null && (
+        <>
+          {"cardDetailedView" in modalProps && (
+            <MemoizedCardDetailedView
+              cardDocument={modalProps.cardDetailedView.card}
+              show={shownModal === "cardDetailedView"}
+              handleClose={handleClose}
+            />
+          )}
+          {"changeQuery" in modalProps && (
+            <ChangeQueryModal
+              slots={modalProps.changeQuery.slots}
+              query={modalProps.changeQuery.query}
+              show={shownModal === "changeQuery"}
+              handleClose={handleClose}
+            />
+          )}
+        </>
       )}
-      {selectedSlots != null && (
-        <ChangeQueryModal
-          slots={selectedSlots}
-          show={shownModal === "changeQuery"}
-          handleClose={handleClose}
-        />
-      )}
-      <FinishedMyProjectModal
-        show={shownModal === "finishedMyProject"}
-        handleClose={handleClose}
-      />
       <SupportDeveloperModal
         show={shownModal === "supportDeveloper"}
         handleClose={handleClose}
@@ -62,6 +61,10 @@ export function Modals() {
       />
       <InvalidIdentifiersModal
         show={shownModal === "invalidIdentifiers"}
+        handleClose={handleClose}
+      />
+      <PDFGeneratorModal
+        show={shownModal === "PDFGenerator"}
         handleClose={handleClose}
       />
     </>

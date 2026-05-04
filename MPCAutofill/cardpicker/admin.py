@@ -1,5 +1,4 @@
 from datetime import date
-from typing import Union
 
 from django.contrib import admin
 from django.contrib.auth.models import User, Group
@@ -21,7 +20,18 @@ from unfold.contrib.filters.admin import SliderNumericFilter, RangeDateFilter
 from unfold.contrib.forms.widgets import ArrayWidget
 from unfold.forms import UserChangeForm, UserCreationForm, AdminPasswordChangeForm
 
-from .models import Card, DFCPair, Project, ProjectMember, Source, Tag, CardTypes
+from .models import (
+    CanonicalArtist,
+    CanonicalCard,
+    CanonicalExpansion,
+    Card,
+    CardTypes,
+    DFCPair,
+    Project,
+    ProjectMember,
+    Source,
+    Tag,
+)
 from .sources.source_types import SourceTypeChoices
 
 """
@@ -70,7 +80,7 @@ class LastUpdatedFilter(RangeDateFilter):
 
 # Register your models here.
 @admin.register(Tag)
-class AdminTag(ModelAdmin[Tag]):
+class AdminTag(ModelAdmin):
     list_display = ("name",)
     search_fields = ("name",)
     formfield_overrides = {
@@ -79,13 +89,14 @@ class AdminTag(ModelAdmin[Tag]):
 
 
 @admin.register(Card)
-class AdminCard(ModelAdmin[Card]):
+class AdminCard(ModelAdmin):
     list_display = ("identifier", "name", "source", "dpi", "date_created", "tags")
     search_fields = ("identifier", "name")
+    raw_id_fields = ["canonical_card", "inferred_canonical_card"]
 
 
 @admin.register(DFCPair)
-class AdminDFCPair(ModelAdmin[DFCPair]):
+class AdminDFCPair(ModelAdmin):
     list_display = ("front", "back")
     search_fields = ("front",)
 
@@ -162,7 +173,7 @@ class AdminSource(ModelAdmin):
                 f"{obj.qty_tokens} tokens")
 
     @admin.display(description="Last Active", ordering="last_updated", empty_value='—')
-    def last_updated(self, obj) -> Union[date, str]:
+    def last_updated(self, obj) -> date | str:
         _date_time = obj.last_updated
         if _date_time:
             try:
@@ -253,13 +264,31 @@ class AdminSource(ModelAdmin):
 
 
 @admin.register(Project)
-class AdminProject(ModelAdmin[Project]):
+class AdminProject(ModelAdmin):
     list_display = ("key", "name", "user", "date_created", "date_modified", "cardback", "cardstock")
 
 
 @admin.register(ProjectMember)
-class AdminCardProjectMembership(ModelAdmin[ProjectMember]):
+class AdminCardProjectMembership(ModelAdmin):
     list_display = ("card_id", "project", "query", "slot", "face")
+
+
+@admin.register(CanonicalArtist)
+class AdminCanonicalArtist(ModelAdmin):
+    list_display = ("name",)
+    search_fields = ("name",)
+
+
+@admin.register(CanonicalExpansion)
+class AdminCanonicalExpansion(ModelAdmin):
+    list_display = ("code", "name", "game")
+    search_fields = ("code", "name")
+
+
+@admin.register(CanonicalCard)
+class AdminCanonicalCard(ModelAdmin):
+    list_display = ("identifier", "name", "expansion", "collector_number", "is_default")
+    search_fields = ("name",)
 
 
 """
@@ -278,9 +307,11 @@ class UserAdmin(BaseUserAdmin, ModelAdmin):
     add_form = UserCreationForm
     change_password_form = AdminPasswordChangeForm
 
+
 @admin.register(Group)
 class GroupAdmin(BaseGroupAdmin, ModelAdmin):
     pass
+
 
 """
 * Django-Q Admin Integration

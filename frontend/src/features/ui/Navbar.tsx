@@ -1,3 +1,4 @@
+import styled from "@emotion/styled";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/router";
@@ -7,7 +8,6 @@ import Container from "react-bootstrap/Container";
 import Nav from "react-bootstrap/Nav";
 import Navbar from "react-bootstrap/Navbar";
 import NavDropdown from "react-bootstrap/NavDropdown";
-import styled from "styled-components";
 
 import {
   ContentMaxWidth,
@@ -16,6 +16,7 @@ import {
 } from "@/common/constants";
 import { useAppDispatch } from "@/common/types";
 import DisableSSR from "@/components/DisableSSR";
+import { RightPaddedIcon } from "@/components/icon";
 import { BackendConfig } from "@/features/backend/BackendConfig";
 import {
   DownloadManager,
@@ -23,8 +24,9 @@ import {
 } from "@/features/download/DownloadManager";
 import { useGetBackendInfoQuery, useGetPatreonQuery } from "@/store/api";
 import {
-  useBackendConfigured,
+  useAnyBackendConfigured,
   useProjectName,
+  useRemoteBackendConfigured,
 } from "@/store/slices/backendSlice";
 import { showModal } from "@/store/slices/modalsSlice";
 
@@ -42,7 +44,8 @@ const BoldCollapse = styled(Navbar.Collapse)`
 
 export default function ProjectNavbar() {
   const dispatch = useAppDispatch();
-  const backendConfigured = useBackendConfigured();
+  const remoteBackendConfigured = useRemoteBackendConfigured();
+  const anyBackendConfigured = useAnyBackendConfigured();
   const backendInfoQuery = useGetBackendInfoQuery();
   const patreonQuery = useGetPatreonQuery();
 
@@ -87,37 +90,45 @@ export default function ProjectNavbar() {
           <Navbar.Toggle aria-controls="basic-navbar-nav" />
           <BoldCollapse id="basic-navbar-nav">
             <Nav className="me-auto">
-              {backendConfigured && (
-                <>
-                  <Nav.Link
-                    as={Link}
-                    href="/editor"
-                    active={router.route === "/editor"}
-                  >
-                    Editor
-                  </Nav.Link>
-                  <Nav.Link
-                    as={Link}
-                    href="/new"
-                    active={router.route === "/new"}
-                  >
-                    What&apos;s New?
-                  </Nav.Link>
-                  <Nav.Link
-                    as={Link}
-                    href="/explore"
-                    active={router.route === "/explore"}
-                  >
-                    Explore
-                  </Nav.Link>
-                  <Nav.Link
-                    as={Link}
-                    href="/contributions"
-                    active={router.route === "/contributions"}
-                  >
-                    Contributions
-                  </Nav.Link>
-                </>
+              {anyBackendConfigured && (
+                <Nav.Link
+                  as={Link}
+                  href="/editor"
+                  active={router.route === "/editor"}
+                  eventKey="/editor"
+                >
+                  Editor
+                </Nav.Link>
+              )}
+              {remoteBackendConfigured && (
+                <Nav.Link
+                  as={Link}
+                  href="/new"
+                  active={router.route === "/new"}
+                  eventKey="/new"
+                >
+                  What&apos;s New?
+                </Nav.Link>
+              )}
+              {anyBackendConfigured && (
+                <Nav.Link
+                  as={Link}
+                  href="/explore"
+                  active={router.route === "/explore"}
+                  eventKey="/explore"
+                >
+                  Explore
+                </Nav.Link>
+              )}
+              {remoteBackendConfigured && (
+                <Nav.Link
+                  as={Link}
+                  href="/contributions"
+                  active={router.route === "/contributions"}
+                  eventKey="/contributions"
+                >
+                  Contributions
+                </Nav.Link>
               )}
               <Nav.Link
                 as={Link}
@@ -133,36 +144,40 @@ export default function ProjectNavbar() {
                 Download
               </Nav.Link>
               <NavDropdown title="Donate">
-                <NavDropdown.Item onClick={handleShowSupportDeveloperModal}>
+                <NavDropdown.Item
+                  onClick={handleShowSupportDeveloperModal}
+                  eventKey="support-developer"
+                >
                   <i className="bi bi-code" /> Support the Developer
                 </NavDropdown.Item>
                 {backendInfoQuery.data?.name != null &&
                   (patreonQuery.data?.url ?? "").trim().length > 0 && (
-                    <NavDropdown.Item onClick={handleShowSupportBackendModal}>
-                      <i className="bi bi-server" /> Support{" "}
-                      {backendInfoQuery.data.name}
+                    <NavDropdown.Item
+                      onClick={handleShowSupportBackendModal}
+                      eventKey="support-backend"
+                    >
+                      <i className="bi bi-server" /> Support the Server
                     </NavDropdown.Item>
                   )}
               </NavDropdown>
             </Nav>
             <Nav className="ms-auto d-flex">
-              <Nav.Link className="m-0 py-0">
+              <Nav.Link className="m-0 py-0" eventKey="download-manager">
                 <OpenDownloadManagerButton
                   handleClick={handleShowDownloadManager}
                 />
               </Nav.Link>
-              {process.env.NEXT_PUBLIC_BACKEND_URL == null && (
-                <Nav.Link className="m-0 py-0">
-                  <Button
-                    className="my-0"
-                    variant="success"
-                    onClick={handleShowBackendConfig}
-                    aria-label="configure-server-btn"
-                  >
-                    Configure Server
-                  </Button>
-                </Nav.Link>
-              )}
+              <Nav.Link className="m-0 py-0" eventKey="configure-backend">
+                <Button
+                  className="my-0"
+                  variant="success"
+                  onClick={handleShowBackendConfig}
+                  aria-label="configure-server-btn"
+                >
+                  <RightPaddedIcon bootstrapIconName="database" />
+                  Sources
+                </Button>
+              </Nav.Link>
             </Nav>
           </BoldCollapse>
         </MaxWidthContainer>

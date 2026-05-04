@@ -18,8 +18,7 @@ import { wrapIndex } from "@/common/utils";
 import { MemoizedEditorCard } from "@/features/card/Card";
 import { CardFooter } from "@/features/card/CardFooter";
 import { GridSelectorModal } from "@/features/gridSelector/GridSelectorModal";
-import { selectCardbacks } from "@/store/slices/cardbackSlice";
-import { setSelectedSlotsAndShowModal } from "@/store/slices/modalsSlice";
+import { showChangeQueryModal } from "@/store/slices/modalsSlice";
 import {
   bulkAlignMemberSelection,
   deleteSlots,
@@ -53,6 +52,7 @@ interface CardSlotGridSelectorProps {
   setSelectedImageFromIdentifier: {
     (selectedImage: string): void;
   };
+  searchq?: string;
 }
 
 export function CardSlotGridSelector({
@@ -63,6 +63,7 @@ export function CardSlotGridSelector({
   show,
   handleClose,
   setSelectedImageFromIdentifier,
+  searchq,
 }: CardSlotGridSelectorProps) {
   return (
     <GridSelectorModal
@@ -72,6 +73,7 @@ export function CardSlotGridSelector({
       show={show}
       handleClose={handleClose}
       onClick={setSelectedImageFromIdentifier}
+      searchq={searchq}
     />
   );
 }
@@ -126,9 +128,13 @@ export function CardSlot({ searchQuery, face, slot }: CardSlotProps) {
   const handleCloseGridSelector = () => setShowGridSelector(false);
   const handleShowGridSelector = () => setShowGridSelector(true);
   const handleShowChangeSelectedImageQueriesModal = () => {
-    dispatch(setSelectedSlotsAndShowModal([[[face, slot]], "changeQuery"]));
+    dispatch(
+      showChangeQueryModal({
+        slots: [[face, slot]],
+        query: searchQuery?.query ?? null,
+      })
+    );
   };
-  // TODO: add a confirmation prompt here. yes/no/yes and don't ask again.
   const deleteThisSlot = () => {
     dispatch(deleteSlots({ slots: [slot] }));
   };
@@ -241,6 +247,7 @@ export function CardSlot({ searchQuery, face, slot }: CardSlotProps) {
           show={showGridSelector}
           handleClose={handleCloseGridSelector}
           setSelectedImageFromIdentifier={setSelectedImageFromIdentifier}
+          searchq={searchQuery?.query ?? undefined}
         />
       )}
     </div>

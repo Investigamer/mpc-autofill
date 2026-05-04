@@ -1,72 +1,31 @@
+import styled from "@emotion/styled";
 import { Queue } from "async-await-queue";
-import { useRouter } from "next/router";
 import { GoogleAnalytics } from "nextjs-google-analytics";
-import React, { useEffect } from "react";
+import React, { useEffect, useReducer } from "react";
 import { PropsWithChildren } from "react";
 import Container from "react-bootstrap/Container";
 import SSRProvider from "react-bootstrap/SSRProvider";
 import { Provider } from "react-redux";
-import styled from "styled-components";
 
 import { ContentMaxWidth, NavbarHeight } from "@/common/constants";
 import {
   getGoogleAnalyticsConsent,
-  getLocalStorageBackendURL,
-  setLocalStorageBackendURL,
+  getLocalStorageFavorites,
 } from "@/common/cookies";
-import { standardiseURL } from "@/common/processing";
-import { useAppDispatch, useAppSelector } from "@/common/types";
+import { useAppDispatch } from "@/common/types";
+import { useBackendSetter } from "@/features/backend/useBackendSetter";
+import { ClientSearchContextProvider } from "@/features/clientSearch/clientSearchContext";
+import { clientSearchService } from "@/features/clientSearch/clientSearchService";
 import {
   DownloadContext,
   DownloadContextProvider,
 } from "@/features/download/download";
 import { Modals } from "@/features/modals/Modals";
+import { pdfRenderService } from "@/features/pdf/pdfRenderService";
 import { Toasts } from "@/features/toasts/Toasts";
 import ProjectNavbar from "@/features/ui/Navbar";
-import {
-  selectBackendURL,
-  setURL,
-  useBackendConfigured,
-} from "@/store/slices/backendSlice";
+import { setAllFavoriteRenders } from "@/store/slices/favoritesSlice";
 import store from "@/store/store";
-
-function BackendSetter() {
-  const router = useRouter();
-  const { server } = router.query;
-  const formattedURL: string | null =
-    server != null && typeof server == "string" && server.length > 0
-      ? standardiseURL(server.trim())
-      : null;
-
-  const dispatch = useAppDispatch();
-  const backendConfigured = useBackendConfigured();
-  const backendURL = useAppSelector(selectBackendURL);
-  useEffect(() => {
-    const envURL = process.env.NEXT_PUBLIC_BACKEND_URL;
-    const localStorageBackendURL = getLocalStorageBackendURL();
-    if (
-      localStorageBackendURL != undefined &&
-      backendURL !== localStorageBackendURL
-    ) {
-      // TODO: stale value here
-      dispatch(setURL(localStorageBackendURL));
-    } else if (envURL != null && envURL !== localStorageBackendURL) {
-      setLocalStorageBackendURL(envURL);
-      if (!backendConfigured) {
-        dispatch(setURL(envURL));
-      }
-    } else if (formattedURL != null) {
-      dispatch(setURL(formattedURL));
-      setLocalStorageBackendURL(formattedURL);
-      if (server != null && typeof server == "string" && server.length > 0) {
-        // @ts-ignore  // TODO
-        router.replace({ server }, undefined, { shallow: true });
-      }
-    }
-  }, [router.isReady, backendConfigured, formattedURL, dispatch, backendURL]);
-
-  return <></>;
-}
 
 const OverscrollProvider = styled(Provider)`
   overscroll-behavior: none;
@@ -109,16 +68,35 @@ export function ProjectContainer({
 export function LayoutWithoutReduxProvider({ children }: PropsWithChildren) {
   const consent = getGoogleAnalyticsConsent();
   const downloadContext: DownloadContext = new Queue(10, 50);
+  const [forceUpdateValue, forceUpdate] = useReducer((x: number) => x + 1, 0);
+  useBackendSetter();
+  const dispatch = useAppDispatch();
+
+  /**
+   * Initialise local files service webworker andoad favourites on app init.
+   */
+  useEffect(() => {
+    const favorites = getLocalStorageFavorites();
+    if (Object.keys(favorites).length > 0) {
+      dispatch(setAllFavoriteRenders(favorites));
+    }
+    clientSearchService.initialiseWorker();
+    pdfRenderService.initialiseWorker();
+  }, []);
+
   return (
     <DownloadContextProvider value={downloadContext}>
-      {consent === true && (
-        <GoogleAnalytics trackPageViews gaMeasurementId="G-JV8WV3FQML" />
-      )}
-      <Toasts />
-      <Modals />
-      <BackendSetter />
-      <ProjectNavbar />
-      {children}
+      <ClientSearchContextProvider
+        value={{ clientSearchService, forceUpdate, forceUpdateValue }}
+      >
+        {consent === true && (
+          <GoogleAnalytics trackPageViews gaMeasurementId="G-JV8WV3FQML" />
+        )}
+        <Toasts />
+        <Modals />
+        <ProjectNavbar />
+        {children}
+      </ClientSearchContextProvider>
     </DownloadContextProvider>
   );
 }

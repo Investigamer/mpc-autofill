@@ -6,13 +6,15 @@ import {
   Tuple,
 } from "@reduxjs/toolkit";
 
+import { clientSearchService } from "@/features/clientSearch/clientSearchService";
 import { api } from "@/store/api";
 import { listenerMiddleware } from "@/store/listenerMiddleware";
 import backendReducer, {
-  selectBackendConfigured,
+  selectRemoteBackendConfigured,
 } from "@/store/slices/backendSlice";
 import cardbacksReducer from "@/store/slices/cardbackSlice";
 import cardDocumentsReducer from "@/store/slices/cardDocumentsSlice";
+import favoritesReducer from "@/store/slices/favoritesSlice";
 import fileDownloadsReducer from "@/store/slices/fileDownloadsSlice";
 import finishSettingsReducer from "@/store/slices/finishSettingsSlice";
 import invalidIdentifiersReducer from "@/store/slices/invalidIdentifiersSlice";
@@ -39,6 +41,7 @@ const rootReducer = combineReducers({
   modals: modalsReducer,
   invalidIdentifiers: invalidIdentifiersReducer,
   fileDownloads: fileDownloadsReducer,
+  favorites: favoritesReducer,
 });
 
 //# region middleware
@@ -54,7 +57,7 @@ const rtkQueryErrorLogger =
       return;
     }
 
-    const backendConfigured = selectBackendConfigured(api.getState());
+    const backendConfigured = selectRemoteBackendConfigured(api.getState());
     if (
       backendConfigured &&
       isRejectedWithValue(action) &&
@@ -88,7 +91,11 @@ export const setupStore = (preloadedState?: Partial<RootState>) => {
     reducer: rootReducer,
     preloadedState,
     middleware: (getDefaultMiddleware) =>
-      getDefaultMiddleware()
+      getDefaultMiddleware({
+        thunk: {
+          extraArgument: { clientSearchService },
+        },
+      })
         .prepend(listenerMiddleware.middleware)
         .concat(new Tuple(api.middleware, rtkQueryErrorLogger)),
   });

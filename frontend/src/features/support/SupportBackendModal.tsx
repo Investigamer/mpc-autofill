@@ -30,7 +30,8 @@ export function SupportBackendModal({
     <Modal scrollable show={show} onHide={handleClose} size="lg">
       <Modal.Header closeButton>
         <Modal.Title>
-          Support {backendInfoQuery.data?.name ?? "Your Server Manager"}
+          Support the Server
+          {backendInfoQuery.data?.name && `: ${backendInfoQuery.data?.name}`}
         </Modal.Title>
       </Modal.Header>
       <Modal.Body>
@@ -76,7 +77,7 @@ export function SupportBackendModal({
                     patron.tier,
                     patron.date,
                   ])}
-                  centred={true}
+                  alignment={"left"}
                   hover={true}
                   uniformWidth={false}
                 />

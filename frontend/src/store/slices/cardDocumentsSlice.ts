@@ -10,9 +10,11 @@ import {
   CardDocumentsState,
   createAppAsyncThunk,
   createAppSlice,
+  OramaCardDocument,
   useAppSelector,
 } from "@/common/types";
 import { CardDocuments } from "@/common/types";
+import { ClientSearchService } from "@/features/clientSearch/clientSearchService";
 import { APIGetCards } from "@/store/api";
 import { fetchCardbacksAndReportError } from "@/store/slices/cardbackSlice";
 import {
@@ -30,7 +32,7 @@ const typePrefix = "cardDocuments/fetchCardDocuments";
 export const getCardDocumentRequestPromiseChain = async (
   identifiersToSearch: Array<string>,
   backendURL: string | null
-) => {
+): Promise<CardDocuments> => {
   if (identifiersToSearch.length > 0 && backendURL != null) {
     // this block of code looks a bit arcane.
     // we're dynamically constructing a promise chain according to the number of requests we need to make
@@ -52,6 +54,8 @@ export const getCardDocumentRequestPromiseChain = async (
         return { ...previousValue, ...cards };
       });
     }, Promise.resolve({}));
+  } else {
+    return {};
   }
 };
 
@@ -61,9 +65,15 @@ const fetchCardDocuments = createAppAsyncThunk(
    * This function queries card documents (entire database rows) from the backend. It only queries cards which have
    * not yet been queried.
    */
-  async (arg, { dispatch, getState }) => {
+  async (
+    arg: { refreshCardbacks?: boolean } | undefined,
+    { dispatch, getState, extra }
+  ) => {
+    const { clientSearchService } = extra as {
+      clientSearchService: ClientSearchService;
+    };
     await fetchSearchResultsAndReportError(dispatch);
-    if (getState().cardbacks.cardbacks.length === 0) {
+    if (arg?.refreshCardbacks || getState().cardbacks.cardbacks.length === 0) {
       await fetchCardbacksAndReportError(dispatch);
     }
 
@@ -82,16 +92,24 @@ const fetchCardDocuments = createAppAsyncThunk(
     );
 
     const backendURL = state.backend.url;
-    return await getCardDocumentRequestPromiseChain(
-      identifiersToSearch,
-      backendURL
+    const localResultsPromise: Promise<CardDocuments> =
+      clientSearchService.getCardDocuments(identifiersToSearch);
+    const remoteResultsPromise: Promise<CardDocuments> =
+      backendURL != null
+        ? getCardDocumentRequestPromiseChain(identifiersToSearch, backendURL)
+        : new Promise(async (resolve) => resolve({}));
+    return await Promise.all([localResultsPromise, remoteResultsPromise]).then(
+      ([localResults, remoteResults]) => ({ ...remoteResults, ...localResults })
     );
   }
 );
 
-export async function fetchCardDocumentsAndReportError(dispatch: AppDispatch) {
+export async function fetchCardDocumentsAndReportError(
+  dispatch: AppDispatch,
+  arg?: { refreshCardbacks?: boolean }
+) {
   try {
-    await dispatch(fetchCardDocuments()).unwrap();
+    await dispatch(fetchCardDocuments(arg)).unwrap();
   } catch (error: any) {
     dispatch(
       setNotification([

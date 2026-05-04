@@ -50,9 +50,6 @@
       "description": "Modified date - formatted by backend",
       "type": "string"
     },
-    "downloadLink": {
-      "type": "string"
-    },
     "size": {
       "type": "integer"
     },
@@ -70,6 +67,12 @@
       "items": {
         "type": "string"
       }
+    },
+    "canonicalCard": {
+      "$ref": "./CanonicalCard.json"
+    },
+    "canonicalArtist": {
+      "$ref": "./CanonicalArtist.json"
     }
   },
   "required": [
@@ -86,7 +89,6 @@
     "extension",
     "dateCreated",
     "dateModified",
-    "downloadLink",
     "size",
     "smallThumbnailUrl",
     "mediumThumbnailUrl",

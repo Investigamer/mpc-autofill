@@ -153,8 +153,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "django.contrib.postgres",
     "django_elasticsearch_dsl",
-    "corsheaders",
-    "django_typer"
+    "corsheaders"
 ]
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",

@@ -151,6 +151,12 @@ cython_debug/
 MPCAutofill/card_db.db
 MPCAutofill/build
 MPCAutofill/cards
+MPCAutofill/config/**/*
+!MPCAutofill/config/drives.example.csv
+!MPCAutofill/config/drives.example.toml
+!MPCAutofill/config/user.example.toml
+!MPCAutofill/config/default.toml
+MPCAutofill/logs
 MPCAutofill/credentials.json
 MPCAutofill/ignored
 */token.pickle
@@ -160,7 +166,7 @@ MPCAutofill/ignored
 ga_settings.py
 bootstrap.min.css
 jquery.ui.touch-punch.js
-MPCAutofill/client_secrets.json
+desktop-tool/client_secrets.json
 **/static/js
 staticroot
 elasticsearch
@@ -168,8 +174,21 @@ elasticsearch
 .env_prod
 MPCAutofill/exported_drives.csv
 MPCAutofill/drives.csv
+MPCAutofill/scryfall_cache/*
 /MPCAutofill/node_modules/
+/schemas/node_modules/
 /MPCAutofill/cardpicker/static/css/
 /static/
 *.woff
 *.woff2
+frontend/public/mockServiceWorker.js
+/image-cdn/node_modules/*
+/image-cdn/.wrangler/*
+
+# Playwright
+node_modules/
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+/playwright/.auth/

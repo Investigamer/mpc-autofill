@@ -1,15 +1,24 @@
-import { Cardstock, CardType, Faces } from "@/common/types";
+import { CardType as CardTypeSchema } from "@/common/schema_types";
+import { Cardstock, CardType, Faces, SortBy } from "@/common/types";
+
+export const CardWidthMM = 63;
+export const CardHeightMM = 88;
+// 36 pixels (each side) at 300 dpi -> 0.12 inches, convert to MM. ref: https://www.makeplayingcards.com/pops/faq-photo.html
+export const BleedEdgeMM = Math.round(0.12 * 25.4 * 1000) / 1000;
+export const CornerRadiusMM = 2.5;
 
 export const ProjectName = "MPC Autofill";
 export const MakePlayingCards = "MakePlayingCards.com";
 export const MakePlayingCardsURL = "https://www.makeplayingcards.com";
 
-export const Card: CardType = "CARD";
-export const Cardback: CardType = "CARDBACK";
-export const Token: CardType = "TOKEN";
+export const Card: CardType = CardTypeSchema.Card;
+export const Cardback: CardType = CardTypeSchema.Cardback;
+export const Token: CardType = CardTypeSchema.Token;
 
 export const SelectedImageSeparator = "@";
 export const CardTypeSeparator = ":";
+export const FaceSeparator = "// ";
+export const FaceSeparatorRegexEscaped = "s//s";
 
 export const CardTypePrefixes: { [prefix: string]: CardType } = {
   "": Card,
@@ -26,12 +35,16 @@ export const ReversedCardTypePrefixes = Object.fromEntries(
 
 export const Front: Faces = "front";
 export const Back: Faces = "back";
-export const FaceSeparator = "|";
 
+export const NavPillButtonHeight = 40; // pixels
+export const NavUnderlineButtonHeight = 42; // pixels
 export const ToggleButtonHeight = 38; // pixels
 export const NavbarHeight = 50; // pixels - aligns with the natural height of the navbar
+export const RibbonHeight = 54; // pixels
 export const NavbarLogoHeight = 40; // pixels
 export const ContentMaxWidth = 1200; // pixels - aligns with bootstrap's large breakpoint
+export const ModalHeaderHeight = 68.7;
+export const ModalFooterHeight = 71;
 
 export const MinimumDPI = 0;
 export const MaximumDPI = 1500;
@@ -42,6 +55,7 @@ export const SizeStep = 1;
 
 export const CSRFKey = "csrftoken";
 export const SearchSettingsKey = "searchSettings";
+export const FavoritesKey = "favorites";
 export const GoogleAnalyticsConsentKey = "googleAnalyticsConsent";
 export const BackendURLKey = "backendURL";
 
@@ -57,14 +71,16 @@ export enum QueryTags {
   SampleCards = "sampleCards",
 }
 
+export const S27: Cardstock = "(S27) Smooth";
 export const S30: Cardstock = "(S30) Standard Smooth";
 export const S33: Cardstock = "(S33) Superior Smooth";
 export const M31: Cardstock = "(M31) Linen";
 export const P10: Cardstock = "(P10) Plastic";
-export const Cardstocks: Array<Cardstock> = [S30, S33, M31, P10];
+export const Cardstocks: Array<Cardstock> = [S27, S30, S33, M31, P10];
 
 export const CardstockFoilCompatibility: { [cardstock in Cardstock]: boolean } =
   {
+    [S27]: true,
     [S30]: true,
     [S33]: true,
     [M31]: true,
@@ -76,3 +92,31 @@ export const GoogleDriveImageAPIURL =
 
 export const SearchResultsEndpointPageSize = 300;
 export const CardEndpointPageSize = 1000;
+
+export enum CSVHeaders {
+  quantity = "Quantity",
+  frontQuery = "Front",
+  frontSelectedImage = "Front ID",
+  backQuery = "Back",
+  backSelectedImage = "Back ID",
+}
+
+export const ExploreDebounceMS = 700;
+export const ExplorePageSize = 60;
+
+export const SortByOptions: { [option in SortBy]: string } = {
+  dateCreatedDescending: "Date Created (Newest-Oldest)",
+  dateCreatedAscending: "Date Created (Oldest-Newest)",
+  dateModifiedDescending: "Date Modified (Newest-Oldest)",
+  dateModifiedAscending: "Date Modified (Oldest-Newest)",
+  nameAscending: "Name (A-Z)",
+  nameDescending: "Name (Z-A)",
+};
+
+export const FavouritesSourceKey = "__favorites__";
+export const UnknownSourceKey = "__unknown__";
+export const Unknown = "Unknown";
+export interface Printing {
+  expansionCode: string;
+  collectorNumber: string;
+}

@@ -1,0 +1,179 @@
+###
+# * This script configures a multi-container setup to serve MPC Autofill and all
+#   its dependencies.
+#
+# * Short Guide:
+#   1) Create a local directory named "mpcautofill". Inside it, create a "config" directory
+#     and a "logs" directory.
+#     - Copy /MPCAutofill/config/user.example.toml -> ./mpcautofill/config/user.toml
+#     - Copy /frontend/.env.dist -> ./mpcautofill/.env.local
+#     - Place your "client_secrets.json" provided by Google Drive API in ./mpcautofill/config
+#   2) Update both .env.local and user.toml to your liking. They are explained in detail
+#     in each respective file.
+#   3) Copy this file to ./mpcautofill/docker-compose.yml, make any changes necessary.
+#   4) Within ./mpcautofill, run `docker compose up` (add -d to run detached).
+###
+
+services:
+
+  # Gunicorn serving Django
+  mpcautofill-backend:
+    image: investigamer/mpcautofill-backend:latest
+    container_name: mpcautofill-backend
+    # * REQUIRED: Do NOT change hostname
+    hostname: mpcautofill-backend
+    restart: unless-stopped
+    depends_on:
+      - postgres
+      - elasticsearch
+    environment:
+      # * REQUIRED: Ensures container operates as Django API server
+      APP_RUN_MODE: server
+      # * Optional: If you wish to import any drives at runtime.
+      IMPORT_DRIVES_FILENAME: drives.toml
+      # * Advanced: If you wish to enable or disable startup procedures,
+      #     the values shown here are the defaults. Does not apply to
+      #     scheduled task runner.
+      DJANGO__RUN_COLLECTSTATIC: 1
+      DJANGO__RUN_MIGRATE: 1
+      DJANGO__RUN_SOURCES_IMPORT: 1
+      DJANGO__RUN_SOURCES_UPDATE: 1
+      DJANGO__RUN_DFCS_UPDATE: 1
+      # * Recommended: Copy and rename `user.example.toml` to `user.toml` inside
+      #     a local config directory. Mount that directory to this container AND
+      #     the worker container, rather than defining the variables below.
+      ELASTICSEARCH__HOST: elasticsearch
+      DATABASE__HOST: postgres
+      DJANGO__DEBUG: False
+      DJANGO__ALLOWED_HOSTS: django-api
+      SITE__GAME: MTG
+    ports:
+      # * Optional: If you want to expose to local machine.
+      - "8000:8000"
+    volumes:
+      # * Recommended: Map to a local directory containing your `user.toml` and
+      #     `drives.toml` (if you wish to import any drives at launch).
+      - ./mpcautofill/config:/app/MPCAutofill/config:rw
+      # * Recommended: Mount a logs directory to capture any log output.
+      - ./mpcautofill/logs:/app/MPCAutofill/logs:rw
+    # * Optional: If you wish to modify anything about how the Django API is served
+    #     by Gunicorn (workers, logging, etc). Defined here is the default behavior.
+    command: >
+      gunicorn MPCAutofill.wsgi:application
+      --bind 0.0.0.0:8000
+      --workers 4
+      --timeout 60
+      --access-logfile -
+      --error-logfile -
+      --log-level info
+      2>&1
+
+  # Django Qcluster worker handling scheduled jobs
+  mpcautofill-worker:
+    image: investigamer/mpcautofill-backend:latest
+    container_name: mpcautofill-worker
+    restart: unless-stopped
+    depends_on:
+      - mpcautofill-backend
+    environment:
+      # REQUIRED: Ensures container operates as scheduled task runner
+      APP_RUN_MODE: worker
+      # * If you removed these when defining `mpcautofill-backend`, remove
+      #     them here as well. Both containers should use the same configuration.
+      ELASTICSEARCH__HOST: elasticsearch
+      DATABASE__HOST: postgres
+      DJANGO__DEBUG: False
+      DJANGO__ALLOWED_HOSTS: django-api
+      SITE__GAME: MTG
+    volumes:
+      # * Should have the same mounts as the `mpcautofill-backend` container.
+      - ./mpcautofill/config:/app/MPCAutofill/config:rw
+      - ./mpcautofill/logs:/app/MPCAutofill/logs:rw
+    # REQUIRED: Do not remove this.
+    command: ["urza", "manage", "qcluster"]
+
+  # Nginx serving the MPCAutofill frontend
+  mpcautofill-frontend:
+    image: investigamer/mpcautofill-frontend:latest
+    container_name: mpcautofill-frontend
+    restart: unless-stopped
+    environment:
+      # * Recommended: Copy and rename `frontend/.env.dist` to `.env.local` inside
+      #     a local directory. Mount that file to this container and define
+      #     NEXT_PUBLIC_BACKEND_URL in that file instead of here.
+      NEXT_PUBLIC_BACKEND_URL: "http://localhost:3000/"
+    ports:
+      - "3000:80"
+    volumes:
+      # * Recommended: Map to a local `.env.local` file.
+      - ./mpcautofill/.env.local:/frontend/.env.local:ro
+    depends_on:
+      - mpcautofill-backend
+
+  postgres:
+    image: postgres:15.0-alpine
+    container_name: postgres
+    # * REQUIRED: Do NOT change hostname
+    hostname: postgres
+    restart: unless-stopped
+    environment:
+      # * REQUIRED: Initial DB name, username, and password of the postgres instance.
+      #     Ensure DATABASE config values in mpcautofill-backend/worker matches this.
+      POSTGRES_DB: mpcautofill
+      POSTGRES_USER: mpcautofill
+      POSTGRES_PASSWORD: mpcautofill
+      # * Optional: Some suggested optimization tweaks, can be modified
+      #     based on the resources available. See Postgres docs for more info,
+      #     or remove for default behavior.
+      POSTGRES_SHARED_BUFFERS: 2GB
+      POSTGRES_MAINTENANCE_WORK_MEM: 400MB
+      POSTGRES_EFFECTIVE_CACHE_SIZE: 4GB
+      POSTGRES_WORK_MEM: 13MB
+      POSTGRES_MAX_CONNECTIONS: 150
+    ports:
+      # * Optional: If you want to expose to local machine.
+      - "5432:5432"
+    volumes:
+      # Map to a local directory or volume
+      - /home/username/apps/postgres:/var/lib/postgresql/data
+
+  elasticsearch:
+    image: elasticsearch:7.14.1
+    container_name: elasticsearch
+    # * REQUIRED: Do NOT change hostname
+    hostname: elasticsearch
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      logger.level: WARN
+      # Optional: JVM heap size. If you do use this, set container memory limit with
+      ES_JAVA_OPTS: "-Xms2048m -Xmx2048m"
+      # Recommended but not required.
+      MAX_OPEN_FILES: 65536
+    deploy:
+      resources:
+        # Optional: Memory limit should be about twice the JVM heap size.
+        #   Reserved memory should be less than or equal to memory limit.
+        limits:
+          memory: 4g
+        reservations:
+          memory: 3g
+    ports:
+      # * Optional: If you want to expose to local machine.
+      - "9200:9200"
+    volumes:
+      # Map to a local directory or volume
+      - /home/username/apps/elasticsearch:/usr/share/elasticsearch/data
+    # Recommended but not required. Remove if MAX_OPEN_FILES not set.
+    command: |
+      eswrapper --ulimit nofile=65536:65536
+
+###
+# * Optional, create a custom docker network with: `docker network create`
+#   See documentation: https://docs.docker.com/reference/cli/docker/network/create/
+# * Otherwise, just remove this.
+###
+networks:
+  default:
+    name: autofill
+    external: true

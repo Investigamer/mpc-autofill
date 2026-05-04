@@ -3,68 +3,77 @@ import textwrap
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from functools import cached_property
-from pathlib import Path
+from functools import cache
 from typing import Any, Generator, Optional
 
 import attr
 import enlighten
+from InquirerPy import inquirer
 from selenium.common import exceptions as sl_exc
-from selenium.common.exceptions import (
-    NoAlertPresentException,
-    NoSuchElementException,
-    NoSuchWindowException,
-)
+from selenium.common.exceptions import NoAlertPresentException, NoSuchElementException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webdriver import WebDriver
-from selenium.webdriver.support.expected_conditions import invisibility_of_element
+from selenium.webdriver.support.expected_conditions import (
+    invisibility_of_element,
+    text_to_be_present_in_element,
+    visibility_of_element_located,
+)
 from selenium.webdriver.support.ui import Select, WebDriverWait
 
-from src.constants import STOCKEN_TO_STOCKDE, THREADS, Browsers, States
+from src.constants import (
+    PROJECT_MAX_SIZE,
+    THREADS,
+    Browsers,
+    Cardstocks,
+    OrderFulfilmentMethod,
+    States,
+    TargetSites,
+)
 from src.exc import InvalidStateException
+from src.formatting import bold
+from src.logging import logger
 from src.order import CardImage, CardImageCollection, CardOrder
 from src.processing import ImagePostProcessingConfig
 from src.utils import (
     alert_handler,
-    bold,
     exception_retry_skip_handler,
+    ignore_javascript_errors,
     log_hours_minutes_seconds_elapsed,
 )
 
 
 @attr.s
 class AutofillDriver:
+    # required to construct this class
     driver: WebDriver = attr.ib(default=None)  # delay initialisation until XML is selected and parsed
     browser: Browsers = attr.ib(default=Browsers.chrome)
     binary_location: Optional[str] = attr.ib(default=None)  # path to browser executable
+    target_site: TargetSites = attr.ib(default=TargetSites.MakePlayingCards)
     headless: bool = attr.ib(default=False)
-    starting_url: str = attr.ib(init=False, default=None)
-    order: CardOrder = attr.ib(default=attr.Factory(CardOrder.from_xml_in_folder))
+    starting_url: str = attr.ib(default="data:")
+
+    # internal properties (init=False)
     state: str = attr.ib(init=False, default=States.initialising)
     action: Optional[str] = attr.ib(init=False, default=None)
     manager: enlighten.Manager = attr.ib(init=False, default=attr.Factory(enlighten.get_manager))
     status_bar: enlighten.StatusBar = attr.ib(init=False, default=False)
+    order_progress_bar: enlighten.Counter = attr.ib(init=False, default=None)
     download_bar: enlighten.Counter = attr.ib(init=False, default=None)
     upload_bar: enlighten.Counter = attr.ib(init=False, default=None)
-    file_path_to_pid_map: dict[str, str] = {}
-    germany: bool = attr.ib(default=False)
-    base_url: str = attr.ib(default=None)
 
     # region initialisation
 
     def initialise_driver(self) -> None:
         try:
-            if self.germany:
-                self.base_url = "https://www.printerstudio.de"
-                self.starting_url = f"{self.base_url}/machen/blanko-spielkarten-63x88mm-personalisieren.html"
-            else:
-                self.base_url = "https://www.makeplayingcards.com"
-                self.starting_url = f"{self.base_url}/design/custom-blank-card.html"
-
-            driver = self.browser.value(headless=self.headless, binary_location=self.binary_location)
+            driver = self.browser.value(headless=self.headless, binary_location=self.binary_location)  # type: ignore  # TODO
             driver.set_window_size(1200, 900)
             driver.implicitly_wait(5)
-            print(f"Successfully initialised {bold(self.browser.name)} driver.")
+            driver.get(self.starting_url)
+            WebDriverWait(driver, 10).until(visibility_of_element_located((By.TAG_NAME, "body")))
+            logger.info(
+                f"Successfully initialised {bold(self.browser.name)} driver "
+                f"targeting {bold(self.target_site.name)}.\n"
+            )
         except (AttributeError, ValueError, sl_exc.WebDriverException) as e:
             raise Exception(
                 f"An error occurred while attempting to configure the webdriver for your specified browser. "
@@ -73,39 +82,57 @@ class AutofillDriver:
 
         self.driver = driver
 
-    def configure_bars(self) -> None:
-        num_images = len(self.order.fronts.cards) + len(self.order.backs.cards)
+    def initialise_bars(self) -> None:
+        # set the total for upload/download bars to 0 here, then change the total according to each order
+        # as they're processed
         status_format = "State: {state}, Action: {action}"
         self.status_bar = self.manager.status_bar(
             status_format=status_format, state=bold(self.state), action=bold("N/A"), position=1, autorefresh=True
         )
-        self.download_bar = self.manager.counter(
-            total=num_images, desc="Images Downloaded", position=2, autorefresh=True
+        self.order_progress_bar = self.manager.counter(
+            total=0, desc="Projects Auto-Filled", position=2, autorefresh=True
         )
-        self.upload_bar = self.manager.counter(total=num_images, desc="Images Uploaded", position=3, autorefresh=True)
-
+        self.download_bar = self.manager.counter(total=0, desc="Images Downloaded   ", position=3, autorefresh=True)
+        self.upload_bar = self.manager.counter(total=0, desc="Images Uploaded     ", position=4, autorefresh=True)
         self.status_bar.refresh()
+        self.order_progress_bar.refresh()
         self.download_bar.refresh()
         self.upload_bar.refresh()
 
-    def __attrs_post_init__(self) -> None:
-        self.configure_bars()
-        self.order.print_order_overview()
-        self.initialise_driver()
-        self.driver.get(self.starting_url)
+    def configure_bars_for_order(self, order: CardOrder) -> None:
+        num_images = len(order.fronts.cards_by_id) + len(order.backs.cards_by_id)
+        self.set_state(state=States.initialising, action=None)
+        self.upload_bar.total = num_images
+        self.download_bar.total = num_images
+        self.upload_bar.update(-self.upload_bar.count)
+        self.download_bar.update(-self.download_bar.count)
+        self.upload_bar.refresh()
+        self.download_bar.refresh()
+
+    def initialise_order(self, order: CardOrder) -> None:
+        logger.info(f"Auto-filling {bold(order.name or 'Unnamed Project')}")
+        logger.info("  " + order.get_overview())
+        self.driver.get(f"{self.target_site.value.starting_url}")
         self.set_state(States.defining_order)
 
-    @cached_property
-    def project_name(self) -> str:
+    def __attrs_post_init__(self) -> None:
+        self.initialise_bars()
+        self.initialise_driver()
+        self.set_state(States.initialised)
+
+    @staticmethod
+    @cache
+    def get_project_name(order_name: Optional[str]) -> str:
         """
-        Format the name of `self.order` such that it's suitable for naming a MakePlayingCards project with.
-        MakePlayingCards project names seem to have a maximum length of 32 characters.
-        We chop off the appropriate amount of `self.order.name` such that we can still include today's date in the name.
+        Format the card order's name such that it's suitable for naming a project with.
+        Project names in the MakePlayingCards family of sites seem to have a maximum length of 32 characters.
+        We chop off the appropriate amount of the resultant name such that we can still include today's date
+        in the name.
         """
 
         today = dt.date.today().strftime("%Y-%m-%d")
         max_project_name_length = 32 - 1 - len(today)  # include a space
-        project_name = Path(self.order.name).stem if self.order.name is not None else "Project"
+        project_name = order_name if order_name is not None else "Project"
         if len(project_name) > max_project_name_length:
             project_name = project_name[0 : max_project_name_length - 3] + "..."
         return f"{project_name} {today}"
@@ -126,33 +153,54 @@ class AutofillDriver:
         Context manager for switching to `frame`.
         """
 
+        logger.debug(f"Switching to frame {frame}...")
         in_frame = True
         try:
             self.driver.switch_to.frame(frame)
-        except (sl_exc.NoSuchFrameException, sl_exc.NoSuchElementException):
+            logger.debug(f"Successfully switched to frame {frame}.")
+        except (sl_exc.NoSuchFrameException, sl_exc.NoSuchElementException) as e:
             in_frame = False
+            logger.debug("Tried to switch to the frame but encountered an exception:")
+            logger.warning(e)
         yield
         if in_frame:
+            logger.debug(f"Switching out of frame {frame}.")
             self.switch_to_default_content()
+        else:
+            logger.debug(f"Couldn't switch to {frame} earlier so there's nothing to do here.")
 
     @alert_handler
     @exception_retry_skip_handler
-    def wait(self) -> None:
+    def wait(self) -> bool:
         """
-        Wait until the loading circle in MPC disappears.
+        Wait until the loading circle in the targeted site disappears.
+        If the frontend locks up while loading, this function will attempt to resolve this
+        with a page refresh (and the return value indicates if a refresh occurred).
         """
 
+        wait_timeout_seconds = 30
+        logger.debug("Waiting until MPC loading circle disappears...")
         try:
             wait_elem = self.driver.find_element(by=By.ID, value="sysdiv_wait")
-            # Wait for the element to become invisible
-            while True:
-                try:
-                    WebDriverWait(self.driver, 100, poll_frequency=0.1).until(invisibility_of_element(wait_elem))
-                except sl_exc.TimeoutException:
-                    continue
-                break
-        except (sl_exc.NoSuchElementException, sl_exc.NoSuchFrameException, sl_exc.WebDriverException):
-            return
+            WebDriverWait(self.driver, wait_timeout_seconds, poll_frequency=0.1).until(
+                invisibility_of_element(wait_elem)
+            )
+            logger.debug("The loading circle has disappeared!")
+        except sl_exc.TimeoutException:
+            logger.info(
+                f"Waited for longer than {wait_timeout_seconds}s for the {self.target_site.name} page "
+                f"to respond - attempting to resolve with a page refresh..."
+            )
+            self.driver.refresh()
+            return True
+        except sl_exc.NoSuchElementException:
+            # The system called this function when the loading circle wasn't present
+            # No worries, just exit here
+            pass
+        except (sl_exc.NoSuchFrameException, sl_exc.WebDriverException) as e:
+            logger.debug("Attempted to locate the loading circle but encountered an exception:")
+            logger.debug(e)
+        return False
 
     def set_state(self, state: str, action: Optional[str] = None) -> None:
         self.state = state
@@ -164,9 +212,7 @@ class AutofillDriver:
         if self.state != expected_state:
             raise InvalidStateException(expected_state, self.state)
 
-    @alert_handler
-    @exception_retry_skip_handler
-    def execute_javascript(self, js: str, return_: bool = False) -> Any:
+    def raw_execute_javascript(self, js: str, return_: bool = False) -> Any:
         """
         Executes the given JavaScript command in self.driver
         This can occasionally fail - e.g.
@@ -175,9 +221,14 @@ class AutofillDriver:
 
         return self.driver.execute_script(f"javascript:{'return ' if return_ else ''}{js}")  # type: ignore
 
+    @alert_handler
+    @exception_retry_skip_handler
+    def execute_javascript(self, js: str, return_: bool = False) -> Any:
+        return self.raw_execute_javascript(js=js, return_=return_)
+
     def wait_until_javascript_object_is_defined(self, function: str) -> None:
         """
-        Depending on the order of operations in the MakePlayingCards project editor, some JavaScript functions
+        Depending on the order of operations in the targeted site's project editor, some JavaScript functions
         can occasionally not be loaded by the time we want to execute them.
         This mostly happens when continuing an existing project with --skipsetup.
         This function works around this issue by pausing the program execution until required JavaScript functions
@@ -186,19 +237,21 @@ class AutofillDriver:
 
         t = time.time()
         while True:
-            if t > 10:
+            elapsed = time.time() - t
+            if elapsed > 10:
+                logger.debug(f"Waited {elapsed} seconds for {function} to be defined - just going to power on.")
                 return
             try:
-                assert self.execute_javascript(f"typeof {function} == undefined", return_=True) is True
+                assert self.execute_javascript(f"typeof {function} == 'undefined'", return_=True) is False
                 return
             except (AssertionError, sl_exc.JavascriptException):
-                print(f"in the loop on {function}")
+                logger.debug(f"Waiting for {function} to be defined...")
                 time.sleep(0.5)
 
     @exception_retry_skip_handler
     def next_step(self) -> None:
         """
-        Page through to the next step in MPC.
+        Page through to the next step in the targeted site.
         """
 
         self.wait()
@@ -207,29 +260,41 @@ class AutofillDriver:
 
     @alert_handler
     @exception_retry_skip_handler
+    @ignore_javascript_errors
     def different_images(self) -> None:
         """
         Sets each card in the current face to use different images.
         """
 
+        logger.debug("Configuring the site with different images for each card in this face.")
         self.wait_until_javascript_object_is_defined("setMode")
         self.wait_until_javascript_object_is_defined("oRenderFeature")  # looks weird but it goes
-        self.execute_javascript("setMode('ImageText', 0);")
+        self.raw_execute_javascript("setMode('ImageText', 0);")
 
     @alert_handler
     @exception_retry_skip_handler
+    @ignore_javascript_errors
     def same_images(self) -> None:
         """
         Sets each card in the current face to use the same image.
         """
 
+        logger.debug("Configuring the site with the same image for each card in this face.")
         self.wait_until_javascript_object_is_defined("setMode")
         self.wait_until_javascript_object_is_defined("oRenderFeature")  # looks weird but it goes
-        self.execute_javascript("setMode('ImageText', 1);")
+        self.raw_execute_javascript("setMode('ImageText', 1);")
+
+    @alert_handler
+    @exception_retry_skip_handler
+    @ignore_javascript_errors
+    def render_design_count(self) -> None:
+        logger.debug("Rendering design count...")
+        self.wait_until_javascript_object_is_defined("PageLayout.prototype.renderDesignCount")
+        self.raw_execute_javascript("PageLayout.prototype.renderDesignCount()")
 
     @exception_retry_skip_handler
     def is_image_currently_uploading(self) -> bool:
-        self.wait_until_javascript_object_is_defined("oDesignImage.UploadStatus")
+        self.wait_until_javascript_object_is_defined("oDesignImage")
         return self.execute_javascript("oDesignImage.UploadStatus == 'Uploading'", return_=True) is True
 
     @exception_retry_skip_handler
@@ -261,11 +326,8 @@ class AutofillDriver:
     # region uploading
 
     @exception_retry_skip_handler
-    def is_slot_filled(self, slot: int) -> bool:
-        self.wait_until_javascript_object_is_defined("PageLayout.prototype.checkEmptyImage")
-        return not self.execute_javascript(
-            f"PageLayout.prototype.checkEmptyImage({self.get_element_for_slot_js(slot)})", return_=True
-        )
+    def get_pid_of_image_in_slot(self, slot: int) -> Optional[str]:
+        return self.execute_javascript(f"{self.get_element_for_slot_js(slot)}.getAttribute('pid')", return_=True)
 
     @exception_retry_skip_handler
     def get_all_uploaded_image_pids(self) -> list[str]:
@@ -280,116 +342,145 @@ class AutofillDriver:
     @exception_retry_skip_handler
     def attempt_to_upload_image(self, image: CardImage) -> None:
         """
-        A single attempt at uploading `image` to MPC.
+        A single attempt at uploading `image` to the targeted site.
         """
 
+        logger.debug(f"Attempting to upload {image.name}...")
         # an image definitely shouldn't be uploading here, but doesn't hurt to make sure
         while self.is_image_currently_uploading():
+            logger.debug("Waiting until the currently uploading image is done...")
             time.sleep(0.5)
 
         # send the image contents to mpc
+        logger.debug("Sending image contents to the targeted site...")
         self.driver.find_element(by=By.ID, value="uploadId").send_keys(image.file_path)
         time.sleep(1)
 
         # wait for the image to finish uploading
+        logger.debug("Waiting until the image has finished uploading...")
         while self.is_image_currently_uploading():
             time.sleep(0.5)
+        logger.debug(f"Finished uploading {image.name}!")
 
     @exception_retry_skip_handler
-    def upload_image(self, image: CardImage, max_tries: int = 3) -> Optional[str]:
+    def upload_image(self, image: CardImage, max_tries: int = 3) -> bool:
         """
-        Uploads the given CardImage with `max_tries` attempts. Returns the image's PID in MPC.
+        Uploads the given CardImage with `max_tries` attempts. Returns whether the image was uploaded.
         """
 
         if image.file_path is not None and image.file_exists():
-            if image.file_path in self.file_path_to_pid_map.keys():
-                return self.file_path_to_pid_map[image.file_path]
+            image.generate_pid()
+            if image.pid in self.get_all_uploaded_image_pids():
+                logger.debug(f"Image {image.name} has already been uploaded")
+                return False
 
             self.set_state(self.state, f'Uploading "{image.name}"')
             get_number_of_uploaded_images = self.get_number_of_uploaded_images()
 
             tries = 0
             while True:
+                logger.debug(f"Commencing attempt {tries+1} of uploading {image.name}...")
                 self.attempt_to_upload_image(image)
                 if self.get_number_of_uploaded_images() > get_number_of_uploaded_images:
-                    # a new image has been uploaded - assume the last image in the editor is the one we just uploaded
-                    pid = self.get_all_uploaded_image_pids()[-1]
-                    self.file_path_to_pid_map[image.file_path] = pid
-                    return pid
+                    return True
                 tries += 1
                 if tries >= max_tries:
-                    print(
+                    logger.warning(
                         f"Attempted to upload image {bold(image.name)} {max_tries} times, "
                         f"but no attempt succeeded! Skipping this image."
                     )
-                    return None
+                    return False
         else:
-            print(f"Image {bold(image.name)} at path {bold(image.file_path or 'None')} does not exist!")
-            return None
+            logger.warning(f"Image {bold(image.name)} at path {bold(image.file_path or 'None')} does not exist!")
+            return False
 
     @exception_retry_skip_handler
-    def insert_image(self, pid: Optional[str], image: CardImage, slots: Optional[list[int]] = None) -> None:
+    def insert_image(self, image: CardImage, max_tries: int = 3) -> bool:
         """
-        Inserts the image identified by `pid` into `image.slots`.
-        If `slots` is specified, fill the image into those slots instead.
+        Inserts the image identified by `pid` into `slots`.
+        Returns whether the project state was mutated by doing this.
         """
 
+        valid_slots = sorted(
+            [
+                slot
+                for slot in image.slots
+                if self.execute_javascript(self.get_element_for_slot_js(slot=slot), return_=True)
+            ]
+        )
+        logger.debug(f"Image {image.name} has valid slots {valid_slots}")
+
+        logger.debug("Waiting until we can insert images...")
         self.wait_until_javascript_object_is_defined("PageLayout.prototype.applyDragPhoto")
 
-        slots_to_fill = image.slots
-        if slots is not None:
-            slots_to_fill = slots
+        state_mutated = False
 
-        if pid:
-            self.set_state(self.state, f'Inserting "{image.name}"')
-            for slot in slots_to_fill:
-                # Insert the card into each slot and wait for the page to load before continuing
-                self.execute_javascript(
-                    f'PageLayout.prototype.applyDragPhoto({self.get_element_for_slot_js(slot)}, 0, "{pid}")'
+        if image.pid:
+            logger.debug(f'Inserting "{image.name}" into slots {valid_slots}...')
+            for i, slot in enumerate(valid_slots, start=1):
+                logger.debug(f"Inserting into slot {slot}...")
+
+                pid_of_image_in_slot = self.get_pid_of_image_in_slot(slot=slot)
+                if pid_of_image_in_slot == image.pid:
+                    # image is already assigned to slot - no work to do.
+                    continue
+
+                state_mutated = True
+                self.set_state(
+                    state=self.state, action=f'Inserting "{image.name}" into slot {slot+1} ({i}/{len(valid_slots)})'
                 )
-                self.wait()
+                # Insert the card into each slot and wait for the page to load before continuing
+                tries = 0
+                page_refreshed_while_inserting_image = True
+                while page_refreshed_while_inserting_image:
+                    self.execute_javascript(
+                        f'PageLayout.prototype.applyDragPhoto({self.get_element_for_slot_js(slot)}, 0, "{image.pid}")'
+                    )
+
+                    page_refreshed_while_inserting_image = self.wait()
+                    tries += 1
+                    if tries >= max_tries:
+                        logger.warning(
+                            f"Attempted to insert image {bold(image.name)} {max_tries} times, "
+                            f"but no attempt succeeded! Skipping this image."
+                        )
+                        break
+            logger.debug(f"All done inserting {image.name} into slots {valid_slots}!")
             self.set_state(self.state)
+        else:
+            logger.debug(f"No PID for {image.name} - skipping this image")
+
+        return state_mutated
 
     @exception_retry_skip_handler
     def upload_and_insert_image(self, image: CardImage) -> bool:
         """
-        Uploads and inserts `image` into MPC. How this is executed depends on whether the image has already been fully
-        or partially uploaded, on not uploaded at all:
-        * None of the image's slots filled - upload the image and insert it into all slots
-        * Some of the image's slots filled - fill the unfilled slots with the image in the first filled
-        * All of the image's slots filled - no action required
-        Returns whether any action to modify the MakePlayingCards project state was taken.
+        Uploads and inserts `image` into the targeted site.
+        Returns whether the project state was mutated.
         """
 
-        slots_filled = [self.is_slot_filled(slot) for slot in image.slots]
-        if all(slots_filled):
-            return False
-        elif not any(slots_filled):
-            pid = self.upload_image(image)
-            self.insert_image(pid, image)
-        else:
-            idx = next(index for index, value in enumerate(slots_filled) if value is True)
-            pid = self.execute_javascript(
-                f'{self.get_element_for_slot_js(image.slots[idx])}.getAttribute("pid")', return_=True
-            )
-            unfilled_slot_numbers = [image.slots[i] for i in range(len(image.slots)) if slots_filled[i] is False]
-            self.insert_image(pid, image, slots=unfilled_slot_numbers)
-        return True
+        self.upload_image(image=image)
+        return self.insert_image(image=image)
 
     @exception_retry_skip_handler
-    def upload_and_insert_images(self, images: CardImageCollection, auto_save_threshold: Optional[int]) -> None:
-        image_count = len(images.cards)
+    def upload_and_insert_images(
+        self, order: CardOrder, images: CardImageCollection, auto_save_threshold: Optional[int]
+    ) -> None:
+        image_count = len(images.cards_by_id)
+        logger.debug(f"Inserting {image_count} images into face {images.face}...")
         for i in range(image_count):
-            image: CardImage = images.queue.get()
-            if image.downloaded:
-                project_mutated = self.upload_and_insert_image(image)
+            drive_id, downloaded = images.queue.get()
+            if downloaded:
+                project_mutated = self.upload_and_insert_image(images.cards_by_id[drive_id])
                 if (
                     auto_save_threshold is not None
                     and project_mutated
                     and ((i % auto_save_threshold) == (auto_save_threshold - 1) or i == (image_count - 1))
                 ):
-                    self.save_project_to_user_account()
+                    self.save_project_to_user_account(order=order)
             self.upload_bar.update()
+            self.upload_bar.refresh()
+        logger.debug(f"Finished inserting {image_count} images into face {images.face}!")
 
     # endregion
 
@@ -397,72 +488,127 @@ class AutofillDriver:
 
     @exception_retry_skip_handler
     def is_user_authenticated(self) -> bool:
-        return len(self.driver.find_elements(By.XPATH, f'//a[@href="{self.base_url}/logout.aspx"]')) == 1
+        return len(self.driver.find_elements(By.XPATH, f'//a[@href="{self.target_site.value.logout_url}"]')) == 1
 
     @exception_retry_skip_handler
     def authenticate(self) -> None:
+        if self.is_user_authenticated():
+            return
+        logger.debug("Attempting to authenticate the user with the targeted site...")
         action = self.action
-        self.driver.get(f"{self.base_url}/login.aspx")
+        self.driver.get(f"{self.target_site.value.login_url}")
         self.set_state(States.defining_order, "Awaiting user sign-in")
-        input(
+        logger.info(
             textwrap.dedent(
-                """
-                The specified inputs require you to sign into your MakePlayingCards account.
-                Please sign in, then return to the console window and press Enter.
+                f"""
+                The specified inputs require you to sign into your {bold(self.target_site.name)} account.
+                The tool will automatically resume once you've signed in.
                 """
             )
         )
         while not self.is_user_authenticated():
-            input(
-                textwrap.dedent(
-                    """
-                    It looks like you're not signed in.
-                    Please sign in, then return to the console window and press Enter.
-                    """
-                )
-            )
-        print("Successfully signed in!")
+            time.sleep(1)
+        logger.info("Successfully signed in!")
         self.set_state(States.defining_order, action)
-        self.driver.get(self.starting_url)
+        self.driver.get(f"{self.target_site.value.starting_url}")
+        logger.debug("Finished authenticating the user with the targeted site!")
 
     # endregion
 
     # region project management
 
     @exception_retry_skip_handler
-    def define_project(self) -> None:
+    def set_bracket(self, quantity: int, dropdown_id: str) -> None:
+        """
+        Configure the project to fit into the smallest
+
+        :raises: If the project size does not fit into any bracket
+        """
+
+        logger.debug(f"Configuring the bracket for the order containing {quantity} cards...")
+        qty_dropdown = Select(self.driver.find_element(by=By.ID, value=dropdown_id))
+        bracket_options = sorted(
+            [
+                option_value
+                for option in qty_dropdown.options
+                if (option_value := int(option.get_attribute("value"))) >= quantity
+            ]
+        )
+        assert bracket_options, (
+            f"Your project contains {bold(quantity)} cards - this does not fit into any bracket "
+            f"that {bold(self.target_site.name)} offers! The brackets are: "
+            f"{', '.join([bold(option) for option in bracket_options])}"
+        )
+        bracket = bracket_options[0]
+        logger.debug(f"The smallest bracket for {quantity} cards is {bracket}.")
+        logger.info(f"This project fits into the bracket of up to {bold(bracket)} cards.")
+        qty_dropdown.select_by_value(str(bracket))
+        logger.debug("Finished configuring the order's bracket!")
+
+    @exception_retry_skip_handler
+    def define_project(self, order: CardOrder) -> None:
+        logger.debug("Defining the project...")
         self.assert_state(States.defining_order)
+
         # Select card stock
-        stock_to_select = STOCKEN_TO_STOCKDE[self.order.details.stock] if self.germany else self.order.details.stock
-        stock_dropdown = Select(self.driver.find_element(by=By.ID, value="dro_paper_type"))
+        logger.debug(f"Selecting cardstock {order.details.stock}...")
+        stock_to_select = self.target_site.value.cardstock_site_name_mapping.get(Cardstocks(order.details.stock))
+        assert (
+            stock_to_select
+        ), f"Cardstock {bold(order.details.stock)} is not supported by {bold(self.target_site.name)}!"
+        stock_dropdown = Select(
+            self.driver.find_element(by=By.ID, value=self.target_site.value.cardstock_dropdown_element_id)
+        )
         stock_dropdown.select_by_visible_text(stock_to_select)
 
         # Select number of cards
-        qty_dropdown = Select(self.driver.find_element(by=By.ID, value="dro_choosesize"))
-        qty_dropdown.select_by_value(str(self.order.details.bracket))
+        logger.debug("Selecting the number of cards...")
+        self.set_bracket(
+            quantity=order.details.quantity, dropdown_id=self.target_site.value.quantity_dropdown_element_id
+        )
 
         # Switch the finish to foil if the user ordered foil cards
-        if self.order.details.foil:
-            foil_dropdown = Select(self.driver.find_element(by=By.ID, value="dro_product_effect"))
-            foil_dropdown.select_by_value("EF_055")
+        if order.details.foil:
+            if self.target_site.value.supports_foil:
+                logger.debug("Selecting foil finish...")
+                foil_dropdown = Select(
+                    self.driver.find_element(by=By.ID, value=self.target_site.value.print_type_dropdown_element_id)
+                )
+                foil_dropdown.select_by_value(self.target_site.value.foil_dropdown_element_value)
+            else:
+                logger.warning(
+                    textwrap.dedent(
+                        f"""
+                        {bold('WARNING')}: Your project is configured to be printed in foil,
+                        but {bold(self.target_site.name)} does not support foil printing.
+                        {bold('Your project will be auto-filled as non-foil.')}
+                        """
+                    )
+                )
 
+        logger.debug("Finished defining the project!")
         self.set_state(States.paging_to_fronts)
 
     @alert_handler
     @exception_retry_skip_handler
-    def redefine_project(self) -> None:
+    def redefine_project(self, order: CardOrder, fulfilment_method: OrderFulfilmentMethod) -> CardOrder:
         """
-        Called when continuing to edit an existing MPC project. Ensures that the MPC project's size and bracket
-        align with the order's size and bracket.
+        Called when continuing to edit an existing project in the targeted site.
+        Ensures that the project's size and bracket align with the order's size and bracket.
         """
 
+        new_order = order
+
+        logger.debug("Redefining the project...")
         self.set_state(States.defining_order, "Awaiting user input")
-        self.driver.get(f"{self.base_url}/design/dn_temporary_designes.aspx")
+        self.driver.get(f"{self.target_site.value.saved_projects_url}")
         input(
             textwrap.dedent(
-                """
-                Continuing to edit an existing order. Please enter the project editor for your selected project,
-                then return to the console window and press Enter.
+                f"""
+                Please find your project in the {bold('My saved projects')} table
+                and click the {bold('Continue to edit')} button next to it.
+                Wait for the page to load {bold('fully')}, then return to the
+                console window and press {bold('Enter')}.
                 """
             )
         )
@@ -470,74 +616,110 @@ class AutofillDriver:
             input(
                 textwrap.dedent(
                     "The SSID of the project cannot be determined from the current URL. "
-                    "Are you sure you're in MPC's project editor?"
+                    "Are you sure you're in the project editor?"
                     "Please enter the editor for your selected project, "
-                    "then return to the console window and press Enter."
+                    f"then return to the console window and press {bold('Enter')}."
                 )
             )
-        print("Successfully entered the editor for an existing project!")
+        logger.info("Successfully entered the editor for an existing project!")
         self.set_state(States.defining_order, "Configuring order")
 
         # navigate to insert fronts page
-        self.execute_javascript(
-            f"oTrackerBar.setFlow('{self.base_url}/products/playingcard/design/dn_playingcards_front_dynamic.aspx?ssid={ssid}');"
-        )
+        logger.debug("Navigating to insert fronts page...")
+        self.execute_javascript(f"oTrackerBar.setFlow('{self.target_site.value.insert_fronts_url}?ssid={ssid}');")
         self.wait()
 
-        self.wait_until_javascript_object_is_defined("PageLayout.prototype.renderDesignCount")
-        self.execute_javascript("PageLayout.prototype.renderDesignCount()")
+        self.render_design_count()
         with self.switch_to_frame("sysifm_loginFrame"):
+            logger.debug("Executing displayTotalCount()...")
             self.wait_until_javascript_object_is_defined("displayTotalCount")
+
+            # read the current project size and calculate the new projcet size
+            # truncate the project if it would exceed the max size
+            qty_element = self.driver.find_element(by=By.ID, value="txt_card_number")
+            current_project_size = int(qty_element.get_attribute("value"))  # type: ignore
+            new_project_size = order.details.quantity
+            if fulfilment_method == OrderFulfilmentMethod.append_to_project:
+                new_project_size += current_project_size
+                if new_project_size > PROJECT_MAX_SIZE:
+                    logger.warning(
+                        f"{bold('Warning')}: After adding this order to the existing {self.target_site.name} project,"
+                        f"your project would consist of {new_project_size} cards, exceeding the maximum"
+                        f"allowable size of {PROJECT_MAX_SIZE} cards."
+                        f"Any cards which fall outside this max allowable project size will be {bold('ignored')}."
+                    )
+                    new_project_size = min(new_project_size, PROJECT_MAX_SIZE)
+
+                new_order = order.offset_slots(
+                    offset=current_project_size, allowed_to_exceed_project_max_size=True
+                ).truncate()
+
+            # do the work of editing the project's bracket and quantity
+            logger.debug(f"Changing the project size from {current_project_size} to {new_project_size}...")
             self.execute_javascript("displayTotalCount()")  # display the dropdown for "up to N cards"
-            qty_dropdown = Select(self.driver.find_element(by=By.ID, value="dro_total_count"))
-            qty_dropdown.select_by_value(str(self.order.details.bracket))
-            qty = self.driver.find_element(by=By.ID, value="txt_card_number")
-            qty.clear()
-            qty.send_keys(str(self.order.details.quantity))
+            self.set_bracket(quantity=new_project_size, dropdown_id="dro_total_count")
+            qty_element.clear()
+            qty_element.send_keys(str(new_project_size))
             self.different_images()
         self.wait()
         self.set_state(States.inserting_fronts)
+        logger.debug("Finished redefining the project!")
+        return new_order
 
     @exception_retry_skip_handler
-    def save_project_to_user_account(self) -> None:
-        self.set_state(self.state, "Saving project to MakePlayingCards account")
+    def save_project_to_user_account(self, order: CardOrder) -> None:
+        logger.debug("Saving the project to the user's account...")
+        self.set_state(self.state, f"Saving project to {self.target_site.name} account")
         project_name_element = self.driver.find_element(by=By.ID, value="txt_temporaryname")
-        if project_name_element.text != self.project_name:
+        project_name = self.get_project_name(order_name=order.name)
+        if project_name_element.text != project_name:
             project_name_element.clear()
-            project_name_element.send_keys(self.project_name)
+            project_name_element.send_keys(project_name)
         self.wait_until_javascript_object_is_defined("oDesign.setTemporarySave")
         self.execute_javascript("oDesign.setTemporarySave();")
-        self.wait()
+
+        wait_timeout_seconds = 30
+        try:
+            WebDriverWait(self.driver, wait_timeout_seconds).until(
+                text_to_be_present_in_element(
+                    (By.ID, "div_temporarysavestatus"), self.target_site.value.saved_successfully_text
+                )
+            )
+        except sl_exc.TimeoutException:
+            logger.info(
+                f"Waited for longer than {wait_timeout_seconds}s for the {self.target_site.name} page to respond - "
+                "attempting to resolve with a page refresh..."
+            )
+            self.driver.refresh()
+        logger.debug("Finished saving the project to the user's account!")
 
     # endregion
 
     # region insert fronts
 
     @exception_retry_skip_handler
-    def page_to_fronts(self) -> None:
+    def page_to_fronts(self, order: CardOrder) -> None:
+        logger.debug("Paging to fronts...")
         self.assert_state(States.paging_to_fronts)
-
-        # reset this between fronts and backs
-        self.file_path_to_pid_map = {}
 
         # Accept current settings and move to next step
         self.wait_until_javascript_object_is_defined("doPersonalize")
-        self.execute_javascript(f"doPersonalize('{self.base_url}/products/pro_item_process_flow.aspx');")
+        self.execute_javascript(f"doPersonalize('{self.target_site.value.accept_settings_url}');")
 
         # Set the desired number of cards, then move to the next step
         with self.switch_to_frame("sysifm_loginFrame"):
             qty = self.driver.find_element(by=By.ID, value="txt_card_number")
             qty.clear()
-            qty.send_keys(str(self.order.details.quantity))
+            qty.send_keys(str(order.details.quantity))
             self.different_images()
 
         self.set_state(States.inserting_fronts)
+        logger.debug("Finished paging to fronts!")
 
     @exception_retry_skip_handler
-    def insert_fronts(self, auto_save_threshold: Optional[int]) -> None:
+    def insert_fronts(self, order: CardOrder, auto_save_threshold: Optional[int]) -> None:
         self.assert_state(States.inserting_fronts)
-        self.upload_and_insert_images(self.order.fronts, auto_save_threshold=auto_save_threshold)
-
+        self.upload_and_insert_images(order=order, images=order.fronts, auto_save_threshold=auto_save_threshold)
         self.set_state(States.paging_to_backs)
 
     # endregion
@@ -545,43 +727,55 @@ class AutofillDriver:
     # region insert backs
 
     @exception_retry_skip_handler
-    def page_to_backs(self, skip_setup: bool) -> None:
+    def page_to_backs(self, order: CardOrder) -> None:
+        logger.debug("Paging to backs...")
         self.assert_state(States.paging_to_backs)
-
-        # reset this between fronts and backs
-        self.file_path_to_pid_map = {}
 
         self.next_step()
         self.wait()
         try:
-            self.driver.find_element(by=By.ID, value="closeBtn").click()
+            close_btn = self.driver.find_element(by=By.ID, value="closeBtn")
+            if close_btn.is_displayed():  # type: ignore  # TODO: because of missing types in selenium i guess?
+                # this may not be clickable after processing one card order
+                close_btn.click()
         except NoSuchElementException:
             pass
         self.next_step()
+        self.wait()
 
-        if skip_setup:
-            # bring up the dialogue for selecting same or different images
-            self.wait()
-            self.wait_until_javascript_object_is_defined("PageLayout.prototype.renderDesignCount")
-            try:
-                self.execute_javascript("PageLayout.prototype.renderDesignCount()")
-            except sl_exc.JavascriptException:  # the dialogue has already been brought up if the above line failed
-                pass
+        try:
+            is_same_images = order.details.quantity > 1 and self.raw_execute_javascript(
+                js=f"{self.get_element_for_slot_js(1)} === null", return_=True
+            )
+        except sl_exc.JavascriptException:
+            is_same_images = True
+
+        changed_from_single_to_different_images = False
+        self.render_design_count()
         with self.switch_to_frame("sysifm_loginFrame"):
-            try:
-                if len(self.order.backs.cards) == 1:
-                    # Same cardback for every card
-                    self.same_images()
-                else:
-                    # Different cardbacks
-                    self.different_images()
-            except NoSuchWindowException:  # TODO: investigate exactly why this happens under --skipsetup. too tired atm
-                pass
+            if is_same_images and len(order.backs.cards_by_id) == 1:
+                # Same cardback for every card
+                self.same_images()
+            else:
+                # Different cardbacks
+                self.different_images()
+                if is_same_images:
+                    changed_from_single_to_different_images = True
+
         self.set_state(States.inserting_backs)
 
-    def insert_backs(self, auto_save_threshold: Optional[int]) -> None:
+        if changed_from_single_to_different_images:
+            pid = self.get_pid_of_image_in_slot(slot=0)
+            slots: set[int] = set(range(1, order.details.quantity)) - set().union(
+                *(card.slots for card in order.backs.cards_by_id.values())
+            )
+            self.insert_image(image=CardImage(slots=slots, name="Cardback", pid=pid))
+
+        logger.debug("Finished paging to backs!")
+
+    def insert_backs(self, order: CardOrder, auto_save_threshold: Optional[int]) -> None:
         self.assert_state(States.inserting_backs)
-        self.upload_and_insert_images(self.order.backs, auto_save_threshold=auto_save_threshold)
+        self.upload_and_insert_images(order=order, images=order.backs, auto_save_threshold=auto_save_threshold)
 
         self.set_state(States.paging_to_review)
 
@@ -601,53 +795,92 @@ class AutofillDriver:
 
     # region public
 
-    def execute(
+    def execute_order(
         self,
-        skip_setup: bool,
+        order: CardOrder,
+        fulfilment_method: OrderFulfilmentMethod,
         auto_save_threshold: Optional[int],
         post_processing_config: Optional[ImagePostProcessingConfig],
     ) -> None:
         t = time.time()
+        self.configure_bars_for_order(order=order)
         with ThreadPoolExecutor(max_workers=THREADS) as pool:
-            self.order.fronts.download_images(
+            order.fronts.download_images(
                 pool=pool, download_bar=self.download_bar, post_processing_config=post_processing_config
             )
-            self.order.backs.download_images(
+            order.backs.download_images(
                 pool=pool, download_bar=self.download_bar, post_processing_config=post_processing_config
             )
-            if any([skip_setup is True, auto_save_threshold is not None]):
+            if any(
+                [
+                    fulfilment_method == OrderFulfilmentMethod.append_to_project,
+                    fulfilment_method == OrderFulfilmentMethod.continue_project,
+                    auto_save_threshold is not None,
+                ]
+            ):
                 self.authenticate()
 
-            if skip_setup:
-
-                self.redefine_project()
-
+            self.initialise_order(order=order)
+            if fulfilment_method == OrderFulfilmentMethod.new_project:
+                logger.info("Configuring a new project.")
+                self.define_project(order=order)
+                self.page_to_fronts(order=order)
             else:
-                print(
-                    textwrap.dedent(
-                        f"""
-                        Configuring a new order. If you'd like to continue uploading cards to an existing project,
-                        start the program and answer with {bold('Y')} when asked whether project setup should
-                        be skipped.
-                        """
-                    )
-                )
-                self.define_project()
-                self.page_to_fronts()
-            self.insert_fronts(auto_save_threshold)
-            self.page_to_backs(skip_setup)
-            self.insert_backs(auto_save_threshold)
+                order = self.redefine_project(order=order, fulfilment_method=fulfilment_method)
+
+            self.insert_fronts(order=order, auto_save_threshold=auto_save_threshold)
+            self.page_to_backs(order=order)
+            self.insert_backs(order=order, auto_save_threshold=auto_save_threshold)
             self.page_to_review()
         log_hours_minutes_seconds_elapsed(t)
-        input(
+        logger.info(
             textwrap.dedent(
-                """
-                Please review your order and ensure everything has been uploaded correctly before finalising with MPC.
-                If any images failed to download, links to download them will have been printed above.
-                If you need to make any changes to your order, you can do so by adding it to your Saved Projects and
-                editing in your normal browser. Press Enter to close this window - your browser window will remain open.
+                f"""
+                Please review your project and ensure everything has been uploaded correctly before finalising with
+                {self.target_site.name}. If any images failed to download, links to download them will have been printed
+                above. If you need to make any changes to your order, you can do so by adding it to your Saved Projects
+                and editing in your normal browser.
                 """
             )
         )
+
+    def execute_orders(
+        self,
+        orders: list[CardOrder],
+        auto_save_threshold: Optional[int],
+        post_processing_config: Optional[ImagePostProcessingConfig],
+    ) -> None:
+        logger.info(f"{bold(len(orders))} project/s are scheduled to be auto-filled. They are:")
+        for i, order in enumerate(orders, start=1):
+            logger.info(f"{i}. {bold(order.name or 'Unnamed Project')}")
+            logger.info("  " + order.get_overview())
+
+        self.order_progress_bar.total = len(orders)
+        self.order_progress_bar.refresh()
+        for i, order in enumerate(orders, start=1):
+            logger.info(f"Auto-filling project {bold(i)} of {bold(len(orders))}.")
+
+            fulfilment_method: OrderFulfilmentMethod = inquirer.select(
+                message="How would you like to upload this order?",
+                choices=[
+                    OrderFulfilmentMethod.new_project,
+                    OrderFulfilmentMethod.append_to_project,
+                    OrderFulfilmentMethod.continue_project,
+                ],
+                default=OrderFulfilmentMethod.new_project,
+            ).execute()
+
+            self.execute_order(
+                order=order,
+                fulfilment_method=fulfilment_method,
+                auto_save_threshold=auto_save_threshold,
+                post_processing_config=post_processing_config,
+            )
+            self.order_progress_bar.update()
+            self.order_progress_bar.refresh()
+            if i < len(orders):
+                if auto_save_threshold is not None:
+                    logger.info("Please add this project to your cart before continuing.")
+                input(f"Press {bold('Enter')} to continue with auto-filling the next project.\n")
 
     # endregion

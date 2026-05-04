@@ -2,37 +2,33 @@ import Head from "next/head";
 import React from "react";
 import { Accordion } from "react-bootstrap";
 
-import { useGetTagsQuery } from "@/app/api";
-import {
-  MakePlayingCards,
-  MakePlayingCardsURL,
-  ProjectName,
-} from "@/common/constants";
+import { ProjectName } from "@/common/constants";
 import { Tag } from "@/common/types";
-import {
-  useBackendConfigured,
-  useProjectName,
-} from "@/features/backend/backendSlice";
+import { MakePlayingCardsLink } from "@/components/MakePlayingCardsLink";
+import { NoBackendDefault } from "@/components/NoBackendDefault";
 import {
   ContributionsPerSource,
   ContributionsSummary,
-} from "@/features/contributions/contributions";
-import Footer from "@/features/ui/footer";
-import { ProjectContainer } from "@/features/ui/layout";
-import { NoBackendDefault } from "@/features/ui/noBackendDefault";
+} from "@/features/contributions/Contributions";
+import Footer from "@/features/ui/Footer";
+import { ProjectContainer } from "@/features/ui/Layout";
+import { useGetTagsQuery } from "@/store/api";
+import {
+  useProjectName,
+  useRemoteBackendConfigured,
+} from "@/store/slices/backendSlice";
 
 function ContributionGuidelines() {
   const projectName = useProjectName();
   const getTagsQuery = useGetTagsQuery();
 
+  /**
+   * Recursively generate a user-facing description of how `tag` works.
+   */
   const describeTag = (tag: Tag) => (
-    /**
-     * Recursively generate a user-facing description of how `tag` works.
-     */
-
     <li key={tag.name}>
       <code>{tag.name}</code>
-      {tag.aliases.length > 0 && (
+      {tag.aliases !== undefined && tag.aliases.length > 0 && (
         <>
           , which has the aliases [
           {tag.aliases.map((alias, i) => (
@@ -47,7 +43,10 @@ function ContributionGuidelines() {
       {tag.children.length > 0 && (
         <>
           {" "}
-          {tag.aliases.length > 0 ? "and" : ", which has"} the sub-tags:
+          {tag.aliases !== undefined && tag.aliases.length > 0
+            ? "and"
+            : ", which has"}{" "}
+          the sub-tags:
           <ul>{tag.children.map(describeTag)}</ul>
         </>
       )}
@@ -175,12 +174,8 @@ function ContributionGuidelines() {
             <li>
               Limit your files to less than <b>30 MB</b> per image &mdash; this
               is the maximum that Google Scripts can return in one request and
-              the maximum that{" "}
-              <a href={MakePlayingCardsURL} target="_blank">
-                {MakePlayingCards}
-              </a>{" "}
-              accepts, meaning the desktop client won&apos;t work with images
-              that exceed this limit.
+              the maximum that <MakePlayingCardsLink /> accepts, meaning the
+              desktop client won&apos;t work with images that exceed this limit.
             </li>
           </ul>
         </Accordion.Body>
@@ -190,8 +185,8 @@ function ContributionGuidelines() {
 }
 
 function ContributionsOrDefault() {
-  const backendConfigured = useBackendConfigured();
-  return backendConfigured ? (
+  const remoteBackendConfigured = useRemoteBackendConfigured();
+  return remoteBackendConfigured ? (
     <>
       <ContributionsSummary />
       <ContributionGuidelines />
@@ -200,7 +195,7 @@ function ContributionsOrDefault() {
       <Footer />
     </>
   ) : (
-    <NoBackendDefault />
+    <NoBackendDefault requirement="remote" />
   );
 }
 
@@ -209,7 +204,7 @@ export default function Contributions() {
   return (
     <ProjectContainer>
       <Head>
-        <title>{projectName} Contributions</title>
+        <title>{`${projectName} Contributions`}</title>
         <meta
           name="description"
           content={`A summary of the image contributors connected to ${ProjectName}.`}

@@ -1,0 +1,10 @@
+###
+# * TOML Notation Example
+###
+[1]
+name = "CreatorName"
+id = "google-drive-id-here"
+type = "GOOGLE_DRIVE"
+description = "CreatorName's super cool image library!"
+is_public = "0"  # Should the link to this drive be visible publicly?
+is_paused = "0"  # Should this drive be paused so it doesn't re-index in the future?

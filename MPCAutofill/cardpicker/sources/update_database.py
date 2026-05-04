@@ -1,3 +1,4 @@
+import socket
 import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
@@ -8,6 +9,7 @@ from django.conf import settings
 from django.db import transaction
 
 from cardpicker.constants import DEFAULT_LANGUAGE, MAX_SIZE_MB
+from cardpicker.documents import CardSearch
 from cardpicker.models import Card, CardTypes, Source
 from cardpicker.search.sanitisation import to_searchable
 from cardpicker.sources.api import Folder, Image
@@ -20,7 +22,10 @@ DPI_HEIGHT_RATIO = 300 / 1110  # 300 DPI for image of vertical resolution 1110 p
 
 
 def add_images_in_folder_to_list(source_type: Type[SourceType], folder: Folder, images: deque[Image]) -> None:
-    images.extend(source_type.get_all_images_inside_folder(folder))
+    try:
+        images.extend(source_type.get_all_images_inside_folder(folder))
+    except Exception as e:
+        print(f"Uncaught exception while adding images in folder to list: **{e}**")
 
 
 def explore_folder(source: Source, source_type: Type[SourceType], root_folder: Folder) -> list[Image]:
@@ -46,6 +51,58 @@ def explore_folder(source: Source, source_type: Type[SourceType], root_folder: F
     return image_list
 
 
+def transform_image_into_object(source: Source, image: Image, tags: Tags) -> Card:
+    # reasons why an image might be invalid
+    assert image.size <= (
+        MAX_SIZE_MB * 1_000_000
+    ), f"Image size is greater than {MAX_SIZE_MB} MB at **{int(image.size / 1_000_000)}** MB"
+    # this can also raise AssertionError
+    language, name, extracted_tags, extension, canonical_card_pk, canonical_artist_pk = image.unpack_name(tags=tags)
+
+    searchable_name = to_searchable(name)
+    dpi = 10 * round(int(image.height) * DPI_HEIGHT_RATIO / 10)
+    source_verbose = source.name
+    priority = 1 if ("(" in name and ")" in name) or len(extracted_tags) > 0 else 2
+
+    folder_location = image.folder.get_full_path(tags=tags)
+    if folder_location == settings.DEFAULT_CARDBACK_FOLDER_PATH:
+        if name == settings.DEFAULT_CARDBACK_IMAGE_NAME:
+            priority += 10
+        priority += 5
+    if "basic" in image.folder.name.lower():
+        priority += 5
+        source_verbose += " Basics"
+
+    card_type = CardTypes.CARD
+    if "token" in image.folder.name.lower():
+        card_type = CardTypes.TOKEN
+        source_verbose = f"{source_verbose} Tokens"
+    elif "cardbacks" in image.folder.name.lower() or "card backs" in image.folder.name.lower():
+        card_type = CardTypes.CARDBACK
+        source_verbose = f"{source_verbose} Cardbacks"
+
+    return Card(
+        identifier=image.id,
+        card_type=card_type,
+        name=name,
+        priority=priority,
+        source=source,
+        source_verbose=source_verbose,
+        folder_location=folder_location,
+        dpi=dpi,
+        searchq=searchable_name,
+        extension=extension,
+        date_created=image.created_time,
+        date_modified=image.modified_time,
+        size=image.size,
+        tags=list(extracted_tags),
+        language=(language or DEFAULT_LANGUAGE).alpha_2.upper(),
+        canonical_card_id=canonical_card_pk,
+        canonical_artist_id=canonical_artist_pk,
+        image_hash=0,
+    )
+
+
 def transform_images_into_objects(source: Source, images: list[Image], tags: Tags) -> list[Card]:
     """
     Transform `images`, which are all associated with `source`, into a set of Django ORM objects ready to be
@@ -59,68 +116,36 @@ def transform_images_into_objects(source: Source, images: list[Image], tags: Tag
     card_count = 0
     cardback_count = 0
     token_count = 0
+    errors: list[str] = []  # report on all exceptions at the end
 
     for image in images:
         try:
-            # reasons why an image might be invalid
-            assert image.size <= (
-                MAX_SIZE_MB * 1_000_000
-            ), f"Image size is greater than {MAX_SIZE_MB} MB at **{int(image.size / 1_000_000)}** MB"
-            # this can also raise AssertionError
-            language, name, extracted_tags, extension = image.unpack_name(tags=tags)
-
-            searchable_name = to_searchable(name)
-            dpi = 10 * round(int(image.height) * DPI_HEIGHT_RATIO / 10)
-            source_verbose = source.name
-            priority = 1 if ("(" in name and ")" in name) or len(extracted_tags) > 0 else 2
-
-            folder_location = image.folder.get_full_path(tags=tags)
-            if folder_location == settings.DEFAULT_CARDBACK_FOLDER_PATH:
-                if name == settings.DEFAULT_CARDBACK_IMAGE_NAME:
-                    priority += 10
-                priority += 5
-            if "basic" in image.folder.name.lower():
-                priority += 5
-                source_verbose += " Basics"
-
-            card_type = CardTypes.CARD
-            if "token" in image.folder.name.lower():
-                card_type = CardTypes.TOKEN
-                source_verbose = f"{source_verbose} Tokens"
-                token_count += 1
-            elif "cardbacks" in image.folder.name.lower() or "card backs" in image.folder.name.lower():
-                card_type = CardTypes.CARDBACK
-                source_verbose = f"{source_verbose} Cardbacks"
-                cardback_count += 1
-            else:
+            card = transform_image_into_object(source, image, tags)
+            cards.append(card)
+            if card.card_type == CardTypes.CARD:
                 card_count += 1
-
-            cards.append(
-                Card(
-                    identifier=image.id,
-                    card_type=card_type,
-                    name=name,
-                    priority=priority,
-                    source=source,
-                    source_verbose=source_verbose,
-                    folder_location=folder_location,
-                    dpi=dpi,
-                    searchq=searchable_name,  # search-friendly card name
-                    searchq_keyword=searchable_name,  # for keyword search
-                    extension=extension,
-                    date=image.created_time,
-                    size=image.size,
-                    tags=list(extracted_tags),
-                    language=(language or DEFAULT_LANGUAGE).alpha_2.upper(),
-                )
-            )
+            elif card.card_type == CardTypes.CARDBACK:
+                cardback_count += 1
+            elif card.card_type == CardTypes.TOKEN:
+                token_count += 1
         except AssertionError as e:
-            print(f"Skipping image **{image.name}** (identifier **{image.id}**) for the following reason: **{e}**")
+            errors.append(
+                f"Assertion error while processing **{image.name}** (identifier **{image.id}**) will not be indexed "
+                f"for the following reason: **{e}**"
+            )
+        except Exception as e:
+            errors.append(
+                f"Uncaught exception while processing image **{image.name}** (identifier **{image.id}**): **{e}**"
+            )
     print(
         f" and done! Generated {TEXT_BOLD}{card_count:,}{TEXT_END} card/s, {TEXT_BOLD}{cardback_count:,}{TEXT_END} "
         f"cardback/s, and {TEXT_BOLD}{token_count:,}{TEXT_END} token/s in "
         f"{TEXT_BOLD}{(time.time() - t0):.2f}{TEXT_END} seconds."
     )
+    if errors:
+        print("The following cards failed to process:", flush=True)
+        for error in errors:
+            print(f"* {error}", flush=True)
 
     return cards
 
@@ -128,10 +153,73 @@ def transform_images_into_objects(source: Source, images: list[Image], tags: Tag
 def bulk_sync_objects(source: Source, cards: list[Card]) -> None:
     print(f"Synchronising objects to database for source {TEXT_BOLD}{source.name}{TEXT_END}...", end="", flush=True)
     t0 = time.time()
-    with transaction.atomic():  # django-bulk-sync is crushingly slow with postgres
-        Card.objects.filter(source=source).delete()
-        Card.objects.bulk_create(cards)
-    print(f" and done! That took {TEXT_BOLD}{(time.time() - t0):.2f}{TEXT_END} seconds.")
+
+    incoming = {card.identifier: card for card in cards}
+    incoming_ids = set(incoming.keys())
+    existing = {card.identifier: card for card in Card.objects.filter(source=source)}
+    existing_ids = set(existing.keys())
+
+    created = [incoming[identifier] for identifier in incoming_ids - existing_ids]
+    updated: list[Card] = []
+    for identifier in incoming_ids & existing_ids:
+        if (
+            # if an update has been recorded on the source's end...
+            (incoming[identifier].date_modified > existing[identifier].date_modified)
+            # or if the card's tags have changed...
+            | (set(incoming[identifier].tags) != set(existing[identifier].tags))
+            # or if the card's name has changed...
+            | (incoming[identifier].name != existing[identifier].name)
+            # or if the canonical card this card is associated with has changed...
+            | (incoming[identifier].canonical_card_id != existing[identifier].canonical_card_id)
+            # or if the canonical artist this card is associated with has changed.
+            | (incoming[identifier].canonical_artist_id != existing[identifier].canonical_artist_id)
+        ):
+            # record an update for this card
+            incoming[identifier].pk = existing[identifier].pk  # this must be explicitly set for bulk_update.
+            updated.append(incoming[identifier])
+    deleted_ids = existing_ids - incoming_ids
+    deleted = [existing[identifier] for identifier in deleted_ids]
+
+    with transaction.atomic():
+        if created:
+            Card.objects.bulk_create(created)
+            CardSearch().update(list(created), action="index")
+        if updated:
+            Card.objects.bulk_update(
+                updated,
+                # update every field except for `identifier`
+                [
+                    "card_type",
+                    "name",
+                    "priority",
+                    "source",
+                    "source_verbose",
+                    "folder_location",
+                    "dpi",
+                    "searchq",
+                    "extension",
+                    "date_created",
+                    "date_modified",
+                    "size",
+                    "tags",
+                    "language",
+                    "canonical_card",
+                    "canonical_artist",
+                ],
+                batch_size=1000,
+            )
+            # as per this thread https://github.com/django-es/django-elasticsearch-dsl/issues/224#issuecomment-551955511
+            # action type "index" is used for indexing new objects as well as updating existing objects
+            CardSearch().update(list(updated), action="index")
+        if deleted_ids:
+            Card.objects.filter(identifier__in=deleted_ids).delete()
+            CardSearch().update(list(deleted), action="delete")
+    print(
+        f" and done! That took {TEXT_BOLD}{(time.time() - t0):.2f}{TEXT_END} seconds.\n"
+        f"Created {TEXT_BOLD}{len(created)}{TEXT_END}, "
+        f"updated {TEXT_BOLD}{len(updated)}{TEXT_END}, "
+        f"and deleted {TEXT_BOLD}{len(deleted_ids)}{TEXT_END} cards."
+    )
 
 
 def update_database_for_source(source: Source, source_type: Type[SourceType], root_folder: Folder, tags: Tags) -> None:
@@ -140,44 +228,77 @@ def update_database_for_source(source: Source, source_type: Type[SourceType], ro
     bulk_sync_objects(source=source, cards=cards)
 
 
-def update_database(source_key: Optional[str] = None) -> None:
+def update_database(sources: Optional[list[str]] = None, is_forced: bool = False) -> bool:
     """
     Update the contents of the database against the configured sources.
     If `source_key` is specified, only update that source; otherwise, update all sources.
     """
 
+    # try to work around https://github.com/googleapis/google-api-python-client/issues/2186
+    socket.setdefaulttimeout(15 * 60)
+    collected = []
     tags = Tags()
-    if source_key:
-        try:
-            source = Source.objects.get(key=source_key)
-            source_type = SourceTypeChoices.get_source_type(SourceTypeChoices[source.source_type])
-            if (root_folder := source_type.get_all_folders([source])[source.key]) is not None:
-                update_database_for_source(source=source, source_type=source_type, root_folder=root_folder, tags=tags)
-        except Source.DoesNotExist:
+    if sources is not None:
+        invalid = []
+
+        # Collect only the specified sources, if they are valid
+        print("Collecting specified sources from the database ...")
+        for source_key in sources:
+            try:
+                _source = Source.objects.get(key=source_key)
+                collected.append(_source)
+            except Source.DoesNotExist:
+                invalid.append(source_key)
+        if invalid:
+            invalid_list = ", ".join(f"{TEXT_BOLD}{invalid}{TEXT_END}")
+            existing_sources = ', '.join([f'{TEXT_BOLD}{x.key}{TEXT_END}' for x in Source.objects.all()])
             print(
-                f"Invalid source specified: {TEXT_BOLD}{source_key}{TEXT_END}"
-                f"\nYou may specify one of the following sources: "
-                f"{', '.join([f'{TEXT_BOLD}{x.key}{TEXT_END}' for x in Source.objects.all()])}"
+                f"SKIPPING these invalid sources: {invalid_list}\n"
+                f"You may specify one of the following sources: {existing_sources}"
             )
-            exit(-1)
+
     else:
-        print("Updating the database for all sources.")
-        sources = sorted(Source.objects.all(), key=lambda x: x.source_type)
-        for source_type_name, grouped_sources_iterable in groupby(sources, lambda x: x.source_type):
-            grouped_sources = list(grouped_sources_iterable)
-            source_type = SourceTypeChoices.get_source_type(SourceTypeChoices[source_type_name])
-            folders = source_type.get_all_folders(grouped_sources)
-            print(
-                f"Identified the following sources of type "
-                f"{TEXT_BOLD}{SourceTypeChoices[source_type_name].label}{TEXT_END}: "
-                f"{', '.join([f'{TEXT_BOLD}{x.name}{TEXT_END}' for x in grouped_sources])}\n"
-            )
-            for grouped_source in grouped_sources:
-                if (root_folder := folders[grouped_source.key]) is not None:
-                    update_database_for_source(
-                        source=grouped_source, source_type=source_type, root_folder=root_folder, tags=tags
-                    )
-                    print("")
+
+        # Collect all sources
+        print("Collecting sources from the database ...")
+        collected = Source.objects.all()
+
+    collected = sorted(collected, key=lambda x: x.source_type)
+    for source_type_name, grouped_sources_iterable in groupby(collected, lambda x: x.source_type):
+        source_type_choice = SourceTypeChoices[source_type_name]
+
+        # Check if we're skipping any sources
+        _sources: list[Source] = list(grouped_sources_iterable)
+        if is_forced:
+            grouped_sources, paused_sources = _sources, []
+        else:
+            grouped_sources = [n for n in _sources if not n.is_paused]
+            paused_sources = [n for n in _sources if n.is_paused]
+
+        # Alert the user what we found
+        if grouped_sources:
+            _update_list = ", ".join([x.name for x in grouped_sources])
+            _source_type_label = f"{TEXT_BOLD}{source_type_choice.label}{TEXT_END}"
+            print(f"Identified the following {_source_type_label} sources to update: {_update_list}")
+        if paused_sources:
+            _paused_list = ", ".join([x.name for x in paused_sources])
+            print(f"Skipping the following paused sources: {_paused_list}")
+        if not grouped_sources:
+            print('There are no sources to update at this time.')
+            continue
+
+        # Get folders for each source
+        source_type = SourceTypeChoices.get_source_type(source_type_choice)
+        folders = source_type.get_all_folders(grouped_sources)
+        for grouped_source in grouped_sources:
+            if (root_folder := folders[grouped_source.key]) is not None:
+                update_database_for_source(
+                    source=grouped_source,
+                    source_type=source_type,
+                    root_folder=root_folder,
+                    tags=tags)
+                print("")
+    return True
 
 
 __all__ = ["update_database"]

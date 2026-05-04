@@ -2,12 +2,12 @@
  * A small wrapper around the `react-dropzone` Dropzone for consistent presentation.
  */
 
+import styled from "@emotion/styled";
 import React, { useCallback } from "react";
 import { DropzoneRootProps, useDropzone } from "react-dropzone";
-import styled from "styled-components";
 
 import { useAppDispatch } from "@/common/types";
-import { setError } from "@/features/toasts/toastsSlice";
+import { setNotification } from "@/store/slices/toastsSlice";
 
 const getColor = (props: DropzoneRootProps) => {
   if (props.isDragAccept) {
@@ -44,12 +44,14 @@ interface StyledDropzoneProps {
     (fileContent: string | ArrayBuffer | null): void;
   };
   label: string;
+  disabled: boolean;
 }
 
 export function TextFileDropzone({
   mimeTypes,
   fileUploadCallback,
   label,
+  disabled,
 }: StyledDropzoneProps) {
   const dispatch = useAppDispatch();
 
@@ -57,27 +59,31 @@ export function TextFileDropzone({
   const onAbort = useCallback(
     () =>
       dispatch(
-        setError([
+        setNotification([
           "dropzone-onabort",
-          { name: "File upload error", message: "File reading was stopped." },
+          {
+            name: "File upload error",
+            message: "File reading was stopped.",
+            level: "error",
+          },
         ])
       ),
-    []
+    [dispatch]
   );
   const onError = useCallback(
     () =>
       dispatch(
-        setError([
+        setNotification([
           "dropzone-onerror",
           {
             name: "File upload error",
             message: "An error occurred while reading the file.",
+            level: "error",
           },
         ])
       ),
-    []
+    [dispatch]
   );
-
   const onDrop = useCallback(
     (acceptedFiles: Array<File>) => {
       acceptedFiles.forEach((file: File) => {
@@ -94,7 +100,7 @@ export function TextFileDropzone({
   );
 
   const { getRootProps, getInputProps, isFocused, isDragAccept, isDragReject } =
-    useDropzone({ onDrop, accept: mimeTypes, maxFiles: 1 });
+    useDropzone({ onDrop, accept: mimeTypes, maxFiles: 1, disabled });
 
   return (
     <div className="container">

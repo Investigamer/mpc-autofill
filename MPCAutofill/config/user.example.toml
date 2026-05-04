@@ -1,0 +1,38 @@
+###
+# * Backend Configuration (User)
+#
+# - Intended for most users deploying with DOCKER or for basic personal use. Copy this file, rename it
+#   "user.toml", make any changes that are necessary, then mount the parent directory of the file in the
+#   docker-compose.yml as instructed.
+#
+# - If you are planning to deploy the app NATIVELY (not with DOCKER) or are an ADVANCED USER, consider
+#   using the `default.toml` as a starting point for creating the `user.toml` file instead.
+###
+
+[DJANGO]
+# Core Django Configuration
+# SECURITY WARNING: Never enable DEBUG in production!
+DEBUG = false
+# SECURITY WARNING: Change these and keep them SECRET for production! -- https://djecrety.ir/
+SECRET_KEY = "secret-key"
+SALT_KEY = "salt-key"
+# CAUTION: These 3 values should likely remain unchanged for DOCKER USERS!
+#
+ALLOWED_HOSTS = ["django-api"]
+CORS_ALLOWED_ORIGINS = ["http://django-api", "https://mpcautofill.github.io"]
+CSRF_TRUSTED_ORIGINS = ["http://django-api"]
+
+[DATABASE]
+# Postgres Database, create username/pass for security
+NAME = "mpcautofill"
+USER = "mpcautofill"
+PASSWORD = "mpcautofill"
+# CAUTION: Host/Port should likely remain unchanged for DOCKER USERS!
+HOST = "postgres"
+PORT = 5432
+
+[ELASTICSEARCH]
+# Elasticsearch Configuration
+# CAUTION: Host/Port should likely remain unchanged for DOCKER USERS!
+HOST = "elasticsearch"
+PORT = 9200

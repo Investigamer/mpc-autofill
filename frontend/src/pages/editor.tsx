@@ -1,15 +1,19 @@
 import Head from "next/head";
 
-import App from "@/app/app";
 import { ProjectName } from "@/common/constants";
-import { useBackendConfigured } from "@/features/backend/backendSlice";
-import { ProjectContainer } from "@/features/ui/layout";
-import { NoBackendDefault } from "@/features/ui/noBackendDefault";
+import { NoBackendDefault } from "@/components/NoBackendDefault";
+import ProjectEditor from "@/components/ProjectEditor";
+import { ProjectContainer } from "@/features/ui/Layout";
+import { useAnyBackendConfigured } from "@/store/slices/backendSlice";
 require("bootstrap-icons/font/bootstrap-icons.css");
 
-function AppOrDefault() {
-  const backendConfigured = useBackendConfigured();
-  return backendConfigured ? <App /> : <NoBackendDefault />;
+function ProjectEditorOrDefault() {
+  const anyBackendConfigured = useAnyBackendConfigured();
+  return anyBackendConfigured ? (
+    <ProjectEditor />
+  ) : (
+    <NoBackendDefault requirement="any" />
+  );
 }
 
 export default function Editor() {
@@ -23,7 +27,7 @@ export default function Editor() {
           content={`${ProjectName}&apos;'s rich project editor.`}
         />
       </Head>
-      <AppOrDefault />
+      <ProjectEditorOrDefault />
     </ProjectContainer>
   );
 }

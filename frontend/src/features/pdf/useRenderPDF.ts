@@ -1,0 +1,96 @@
+import { useEffect } from "react";
+import { useAsync } from "react-use";
+
+import { pdfRenderService } from "@/features/pdf/pdfRenderService";
+
+import { useClientSearchContext } from "../clientSearch/clientSearchContext";
+import { PDFProps } from "./PDF";
+
+export const useRenderPDF = ({
+  cardSelectionMode,
+  pageSize,
+  pageWidth,
+  pageHeight,
+  bleedEdgeMM,
+  roundCorners,
+  drawCutLines,
+  cutLineLengthMM,
+  cutLineOffsetMM,
+  cutLineThicknessMM,
+  cutLineColor,
+  cardSpacingRowMM,
+  cardSpacingColMM,
+  pageMarginTopMM,
+  pageMarginBottomMM,
+  pageMarginLeftMM,
+  pageMarginRightMM,
+  cardDocumentsByIdentifier,
+  projectMembers,
+  projectCardback,
+  imageQuality,
+  imageDPI,
+  jpgQuality,
+}: Omit<PDFProps, "fileHandles">) => {
+  const { clientSearchService } = useClientSearchContext();
+  const {
+    value: url,
+    loading,
+    error,
+  } = useAsync(async () => {
+    const fileHandles = await clientSearchService.getFileHandlesByIdentifier(
+      cardDocumentsByIdentifier
+    );
+    return pdfRenderService.renderPDFInWorker({
+      cardSelectionMode,
+      pageSize,
+      pageWidth,
+      pageHeight,
+      bleedEdgeMM,
+      roundCorners,
+      drawCutLines,
+      cutLineLengthMM,
+      cutLineOffsetMM,
+      cutLineThicknessMM,
+      cutLineColor,
+      cardSpacingRowMM,
+      cardSpacingColMM,
+      pageMarginTopMM,
+      pageMarginBottomMM,
+      pageMarginLeftMM,
+      pageMarginRightMM,
+      cardDocumentsByIdentifier,
+      projectMembers,
+      projectCardback,
+      imageQuality,
+      imageDPI,
+      jpgQuality,
+      fileHandles,
+    });
+  }, [
+    cardSelectionMode,
+    pageSize,
+    pageWidth,
+    pageHeight,
+    bleedEdgeMM,
+    roundCorners,
+    drawCutLines,
+    cutLineLengthMM,
+    cutLineThicknessMM,
+    cutLineColor,
+    cardSpacingRowMM,
+    cardSpacingColMM,
+    pageMarginTopMM,
+    pageMarginBottomMM,
+    pageMarginLeftMM,
+    pageMarginRightMM,
+    cardDocumentsByIdentifier,
+    projectMembers,
+    projectCardback,
+    imageQuality,
+    imageDPI,
+    jpgQuality,
+  ]);
+
+  useEffect(() => (url ? () => URL.revokeObjectURL(url) : undefined), [url]);
+  return { url, loading, error };
+};

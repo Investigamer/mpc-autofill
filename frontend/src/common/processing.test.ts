@@ -1,7 +1,12 @@
-import each from "jest-each";
-
-import { Card, Cardback, Token } from "@/common/constants";
 import {
+  Card,
+  Cardback,
+  FaceSeparator,
+  SelectedImageSeparator,
+  Token,
+} from "@/common/constants";
+import {
+  parseCSVFileAsLines,
   processLine,
   processPrefix,
   processQuery,
@@ -9,7 +14,9 @@ import {
   sanitiseWhitespace,
   standardiseURL,
   stripTextInParentheses,
+  toSearchable,
 } from "@/common/processing";
+import { CardType } from "@/common/schema_types";
 import { DFCPairs } from "@/common/types";
 
 // # region constants
@@ -55,14 +62,14 @@ test("query with numbers is processed correctly", () => {
 
 test("prefix is processed correctly", () => {
   expect(processPrefix("t:goblin")).toStrictEqual({
-    card_type: Token,
+    cardType: Token,
     query: "goblin",
   });
 });
 
 test("empty prefix is processed correctly", () => {
   expect(processPrefix("soldier")).toStrictEqual({
-    card_type: Card,
+    cardType: Card,
     query: "soldier",
   });
 });
@@ -71,7 +78,7 @@ test("line that doesn't specify quantity is processed correctly", () => {
   expect(processLine("opt", dfcPairs, false)).toStrictEqual([
     1,
     {
-      query: { card_type: Card, query: "opt" },
+      query: { cardType: Card, query: "opt" },
       selectedImage: undefined,
       selected: false,
     },
@@ -83,7 +90,7 @@ test("line that doesn't specify quantity but name begins with X is processed cor
   expect(processLine("xenagos the reveler", dfcPairs, false)).toStrictEqual([
     1,
     {
-      query: { card_type: Card, query: "xenagos the reveler" },
+      query: { cardType: Card, query: "xenagos the reveler" },
       selectedImage: undefined,
       selected: false,
     },
@@ -95,7 +102,7 @@ test("non-dfc line is processed correctly", () => {
   expect(processLine("3x Lightning Bolt", dfcPairs, false)).toStrictEqual([
     3,
     {
-      query: { card_type: Card, query: "lightning bolt" },
+      query: { cardType: Card, query: "lightning bolt" },
       selectedImage: undefined,
       selected: false,
     },
@@ -107,7 +114,7 @@ test("non-dfc cardback line is processed correctly", () => {
   expect(processLine("3x b:Black Lotus", dfcPairs, false)).toStrictEqual([
     3,
     {
-      query: { card_type: Cardback, query: "black lotus" },
+      query: { cardType: Cardback, query: "black lotus" },
       selectedImage: undefined,
       selected: false,
     },
@@ -116,15 +123,17 @@ test("non-dfc cardback line is processed correctly", () => {
 });
 
 test("manually specified front and back line is processed correctly", () => {
-  expect(processLine("5 Opt | Char", dfcPairs, false)).toStrictEqual([
+  expect(
+    processLine(`5 Opt${FaceSeparator}Char`, dfcPairs, false)
+  ).toStrictEqual([
     5,
     {
-      query: { card_type: Card, query: "opt" },
+      query: { cardType: Card, query: "opt" },
       selectedImage: undefined,
       selected: false,
     },
     {
-      query: { card_type: Card, query: "char" },
+      query: { cardType: Card, query: "char" },
       selectedImage: undefined,
       selected: false,
     },
@@ -137,12 +146,12 @@ test("line that matches to dfc pair is processed correctly", () => {
   ).toStrictEqual([
     2,
     {
-      query: { card_type: Card, query: "huntmaster of the fells" },
+      query: { cardType: Card, query: "huntmaster of the fells" },
       selectedImage: undefined,
       selected: false,
     },
     {
-      query: { card_type: Card, query: "ravager of the fells" },
+      query: { cardType: Card, query: "ravager of the fells" },
       selectedImage: undefined,
       selected: false,
     },
@@ -153,12 +162,12 @@ test("line that fuzzy matches to dfc pair is processed correctly", () => {
   expect(processLine("2 bat", { batman: "ratman" }, true)).toStrictEqual([
     2,
     {
-      query: { card_type: Card, query: "bat" },
+      query: { cardType: Card, query: "bat" },
       selectedImage: undefined,
       selected: false,
     },
     {
-      query: { card_type: Card, query: "ratman" },
+      query: { cardType: Card, query: "ratman" },
       selectedImage: undefined,
       selected: false,
     },
@@ -169,7 +178,7 @@ test("line that doesn't fuzzy match to dfc pair is processed correctly", () => {
   expect(processLine("2 cat", { batman: "ratman" }, true)).toStrictEqual([
     2,
     {
-      query: { card_type: Card, query: "cat" },
+      query: { cardType: Card, query: "cat" },
       selectedImage: undefined,
       selected: false,
     },
@@ -183,7 +192,7 @@ test("line that fuzzy matches ambiguously to dfc pair is processed correctly", (
   ).toStrictEqual([
     2,
     {
-      query: { card_type: Card, query: "bat" },
+      query: { cardType: Card, query: "bat" },
       selectedImage: undefined,
       selected: false,
     },
@@ -193,16 +202,20 @@ test("line that fuzzy matches ambiguously to dfc pair is processed correctly", (
 
 test("line that matches to dfc pair but a back is also manually specified is processed correctly", () => {
   expect(
-    processLine("2 Huntmaster of the Fells | t:Goblin", dfcPairs, false)
+    processLine(
+      `2 Huntmaster of the Fells${FaceSeparator}t:Goblin`,
+      dfcPairs,
+      false
+    )
   ).toStrictEqual([
     2,
     {
-      query: { card_type: Card, query: "huntmaster of the fells" },
+      query: { cardType: Card, query: "huntmaster of the fells" },
       selectedImage: undefined,
       selected: false,
     },
     {
-      query: { card_type: Token, query: "goblin" },
+      query: { cardType: Token, query: "goblin" },
       selectedImage: undefined,
       selected: false,
     },
@@ -222,12 +235,12 @@ test("a card name that's a subset of a DFC pair's front is not matched", () => {
     [
       1,
       {
-        query: { card_type: Card, query: "elesh norn" },
+        query: { cardType: Card, query: "elesh norn" },
         selectedImage: undefined,
         selected: false,
       },
       {
-        query: { card_type: Card, query: "the argent etchings" },
+        query: { cardType: Card, query: "the argent etchings" },
         selectedImage: undefined,
         selected: false,
       },
@@ -235,7 +248,7 @@ test("a card name that's a subset of a DFC pair's front is not matched", () => {
     [
       1,
       {
-        query: { card_type: Card, query: "elesh norn grand cenobite" },
+        query: { cardType: Card, query: "elesh norn grand cenobite" },
         selectedImage: undefined,
         selected: false,
       },
@@ -248,7 +261,7 @@ test("line that requests 0 of a card is processed correctly", () => {
   expect(processLine("0 opt", dfcPairs, false)).toStrictEqual([
     0,
     {
-      query: { card_type: Card, query: "opt" },
+      query: { cardType: Card, query: "opt" },
       selectedImage: undefined,
       selected: false,
     },
@@ -260,7 +273,7 @@ test("line that requests -1 of a card is processed correctly", () => {
   expect(processLine("-1 opt", dfcPairs, false)).toStrictEqual([
     1,
     {
-      query: { card_type: Card, query: "-1 opt" },
+      query: { cardType: Card, query: "-1 opt" },
       selectedImage: undefined,
       selected: false,
     },
@@ -279,7 +292,7 @@ test("multiple lines processed correctly", () => {
     [
       1,
       {
-        query: { card_type: Card, query: "char" },
+        query: { cardType: Card, query: "char" },
         selectedImage: undefined,
         selected: false,
       },
@@ -288,12 +301,12 @@ test("multiple lines processed correctly", () => {
     [
       2,
       {
-        query: { card_type: Card, query: "delver of secrets" },
+        query: { cardType: Card, query: "delver of secrets" },
         selectedImage: undefined,
         selected: false,
       },
       {
-        query: { card_type: Card, query: "insectile aberration" },
+        query: { cardType: Card, query: "insectile aberration" },
         selectedImage: undefined,
         selected: false,
       },
@@ -302,10 +315,12 @@ test("multiple lines processed correctly", () => {
 });
 
 test("a line specifying the selected image ID for the front is processed correctly", () => {
-  expect(processLine("opt@xyz", dfcPairs, false)).toStrictEqual([
+  expect(
+    processLine(`opt${SelectedImageSeparator}xyz`, dfcPairs, false)
+  ).toStrictEqual([
     1,
     {
-      query: { card_type: Card, query: "opt" },
+      query: { cardType: Card, query: "opt" },
       selectedImage: "xyz",
       selected: false,
     },
@@ -314,34 +329,152 @@ test("a line specifying the selected image ID for the front is processed correct
 });
 
 test("a line specifying the selected image ID for both faces is processed correctly", () => {
-  expect(processLine("2 opt@xyz | char@abcd", dfcPairs, false)).toStrictEqual([
+  expect(
+    processLine(
+      `2 opt${SelectedImageSeparator}xyz${FaceSeparator}char${SelectedImageSeparator}abcd`,
+      dfcPairs,
+      false
+    )
+  ).toStrictEqual([
     2,
     {
-      query: { card_type: Card, query: "opt" },
+      query: { cardType: Card, query: "opt" },
       selectedImage: "xyz",
       selected: false,
     },
     {
-      query: { card_type: Card, query: "char" },
+      query: { cardType: Card, query: "char" },
       selectedImage: "abcd",
       selected: false,
     },
   ]);
 });
 
+describe("file path-like identifier handling", () => {
+  test.each([
+    {
+      line: "opt@./some/path/opt.png",
+      expectedResult: [
+        1,
+        {
+          query: {
+            query: "opt",
+            cardType: CardType.Card,
+          },
+          selectedImage: "./some/path/opt.png",
+          selected: false,
+        },
+        null,
+      ],
+    },
+    {
+      line: "opt@./some/path/opt.png // char",
+      expectedResult: [
+        1,
+        {
+          query: {
+            query: "opt",
+            cardType: CardType.Card,
+          },
+          selectedImage: "./some/path/opt.png",
+          selected: false,
+        },
+        {
+          query: {
+            query: "char",
+            cardType: CardType.Card,
+          },
+          selectedImage: undefined,
+          selected: false,
+        },
+      ],
+    },
+    {
+      line: "opt@./some/path/opt.png // char@./some/other/path/char.jpg",
+      expectedResult: [
+        1,
+        {
+          query: {
+            query: "opt",
+            cardType: CardType.Card,
+          },
+          selectedImage: "./some/path/opt.png",
+          selected: false,
+        },
+        {
+          query: {
+            query: "char",
+            cardType: CardType.Card,
+          },
+          selectedImage: "./some/other/path/char.jpg",
+          selected: false,
+        },
+      ],
+    },
+    {
+      line: "opt@./some path with spaces/opt.png",
+      expectedResult: [
+        1,
+        {
+          query: {
+            query: "opt",
+            cardType: CardType.Card,
+          },
+          selectedImage: "./some path with spaces/opt.png",
+          selected: false,
+        },
+        null,
+      ],
+    },
+  ])("%s", ({ line, expectedResult }) => {
+    expect(processLine(line, {}, false)).toStrictEqual(expectedResult);
+  });
+});
+
+describe("toSearchable", () => {
+  test.each([
+    { input: "Lightning Bolt", expectedOutput: "lightning bolt" },
+    { input: " Lightning   BOLT ", expectedOutput: "lightning bolt" },
+    { input: "Adanto, the First Fort", expectedOutput: "adanto first fort" },
+    { input: "Black Lotus (Masterpiece)", expectedOutput: "black lotus" }, // brackets removal
+    {
+      input: "Black Lotus (Masterpiece, But With Punctuation! )",
+      expectedOutput: "black lotus",
+    },
+    { input: "Juzám Djinn", expectedOutput: "juzam djinn" }, // orama will NOT handle this
+    { input: " Expansion _ Explosion", expectedOutput: "expansion explosion" },
+    { input: "Kodama’s Reach", expectedOutput: "kodamas reach" },
+    { input: "消灭邪物", expectedOutput: "消灭邪物" },
+  ])("%s", ({ input, expectedOutput }) => {
+    expect(toSearchable(input)).toStrictEqual(expectedOutput);
+  });
+});
+
 describe("URLs are sanitised correctly", () => {
-  each([
+  test.each([
     "http://127.0.0.1:8000",
     "http://127.0.0.1:8000/",
     "https://127.0.0.1:8000",
     "127.0.0.1:8000",
     "127.0.0.1:8000/",
     "127.0.0.1:8000/path",
-  ]).test("%s", (text) => {
+  ])("%s", (text) => {
     expect(standardiseURL(text)).toBe(
       "http" + (text.includes("http://") ? "" : "s") + "://127.0.0.1:8000"
     );
   });
+});
+
+test.each([
+  "Quantity,Front,Front ID,Back,Back ID\n2, opt, xyz, char, abcd",
+  "Quantity, Front, Front ID, Back, Back ID\n2, opt, xyz, char, abcd",
+  "Quantity,   Front, Front ID,   Back,  Back ID   \n    2,   opt,  xyz,  char, abcd  ",
+])("CSV is parsed correctly", () => {
+  const csv =
+    "Quantity, Front, Front ID, Back, Back ID\n2, opt, xyz, char, abcd";
+  expect(parseCSVFileAsLines(csv)).toStrictEqual([
+    `2 opt${SelectedImageSeparator}xyz${FaceSeparator}char${SelectedImageSeparator}abcd`,
+  ]);
 });
 
 // # endregion

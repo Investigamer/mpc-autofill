@@ -1,17 +1,28 @@
 import datetime as dt
 
+import freezegun
 import pytest
 
-from cardpicker.models import Card
+from django.core import management
+from django.utils.timezone import make_aware, make_naive
+
+from cardpicker.documents import CardSearch
+from cardpicker.models import CanonicalArtist, CanonicalCard, Card
 from cardpicker.sources.api import Folder, Image
-from cardpicker.sources.update_database import update_database
+from cardpicker.sources.update_database import bulk_sync_objects, update_database
 from cardpicker.tags import Tags
+from cardpicker.tests import factories
+from cardpicker.tests.factories import (
+    CanonicalArtistFactory,
+    CanonicalCardFactory,
+    CanonicalExpansionFactory,
+)
+
+DEFAULT_DATE = dt.datetime(2023, 1, 1)
 
 
 class TestAPI:
     # region constants
-
-    DEFAULT_DATE = dt.datetime(2023, 1, 1)
 
     FOLDER_A = Folder(id="a", name="Folder A", parent=None)
     FOLDER_B = Folder(id="b", name="Folder B", parent=FOLDER_A)
@@ -26,40 +37,167 @@ class TestAPI:
     FOLDER_Z = Folder(id="z", name="Folder z [Full Art", parent=None)
     FOLDER_FRENCH = Folder(id="french", name="{FR} Folder", parent=None)
 
-    IMAGE_A = Image(id="a", name="Image A.png", size=1, created_time=DEFAULT_DATE, height=1, folder=FOLDER_A)
-    IMAGE_B = Image(id="b", name="Image B [NSFW].png", size=1, created_time=DEFAULT_DATE, height=1, folder=FOLDER_A)
-    IMAGE_C = Image(id="b", name="Image C.png", size=1, created_time=DEFAULT_DATE, height=1, folder=FOLDER_C)
+    IMAGE_A = Image(
+        id="a",
+        name="Image A.png",
+        size=1,
+        created_time=DEFAULT_DATE,
+        modified_time=DEFAULT_DATE,
+        height=1,
+        folder=FOLDER_A,
+    )
+    IMAGE_B = Image(
+        id="b",
+        name="Image B [NSFW].png",
+        size=1,
+        created_time=DEFAULT_DATE,
+        modified_time=DEFAULT_DATE,
+        height=1,
+        folder=FOLDER_A,
+    )
+    IMAGE_C = Image(
+        id="b",
+        name="Image C.png",
+        size=1,
+        created_time=DEFAULT_DATE,
+        modified_time=DEFAULT_DATE,
+        height=1,
+        folder=FOLDER_C,
+    )
     IMAGE_D = Image(
-        id="b", name="Image D [NSFW, full art].png", size=1, created_time=DEFAULT_DATE, height=1, folder=FOLDER_C
+        id="b",
+        name="Image D [NSFW, full art].png",
+        size=1,
+        created_time=DEFAULT_DATE,
+        modified_time=DEFAULT_DATE,
+        height=1,
+        folder=FOLDER_C,
     )
     IMAGE_E = Image(
-        id="e", name="Image E [invalid tag.png", size=1, created_time=DEFAULT_DATE, height=1, folder=FOLDER_A
+        id="e",
+        name="Image E [invalid tag.png",
+        size=1,
+        created_time=DEFAULT_DATE,
+        modified_time=DEFAULT_DATE,
+        height=1,
+        folder=FOLDER_A,
     )
     IMAGE_F = Image(
-        id="F", name="Image F [NSFW, tag in data].png", size=1, created_time=DEFAULT_DATE, height=1, folder=FOLDER_A
+        id="F",
+        name="Image F [NSFW, tag in data].png",
+        size=1,
+        created_time=DEFAULT_DATE,
+        modified_time=DEFAULT_DATE,
+        height=1,
+        folder=FOLDER_A,
     )
     IMAGE_G = Image(
-        id="G", name="Image G [NSFW] (John Doe).png", size=1, created_time=DEFAULT_DATE, height=1, folder=FOLDER_A
+        id="G",
+        name="Image G [NSFW] (John Doe).png",
+        size=1,
+        created_time=DEFAULT_DATE,
+        modified_time=DEFAULT_DATE,
+        height=1,
+        folder=FOLDER_A,
     )
     IMAGE_H = Image(
-        id="H", name="Image H [A, NSFW, B] (John Doe).png", size=1, created_time=DEFAULT_DATE, height=1, folder=FOLDER_A
+        id="H",
+        name="Image H [A, NSFW, B] (John Doe).png",
+        size=1,
+        created_time=DEFAULT_DATE,
+        modified_time=DEFAULT_DATE,
+        height=1,
+        folder=FOLDER_A,
     )
-    IMAGE_I = Image(id="I", name="Image A.I.png", size=1, created_time=DEFAULT_DATE, height=1, folder=FOLDER_A)
+    IMAGE_I = Image(
+        id="I",
+        name="Image A.I.png",
+        size=1,
+        created_time=DEFAULT_DATE,
+        modified_time=DEFAULT_DATE,
+        height=1,
+        folder=FOLDER_A,
+    )
     IMAGE_J = Image(
-        id="J", name="Image J [Child Tag].png", size=1, created_time=DEFAULT_DATE, height=1, folder=FOLDER_A
+        id="J",
+        name="Image J [Child Tag].png",
+        size=1,
+        created_time=DEFAULT_DATE,
+        modified_time=DEFAULT_DATE,
+        height=1,
+        folder=FOLDER_A,
     )
     IMAGE_K = Image(
-        id="K", name="Image K [Grandchild Tag].png", size=1, created_time=DEFAULT_DATE, height=1, folder=FOLDER_A
+        id="K",
+        name="Image K [Grandchild Tag].png",
+        size=1,
+        created_time=DEFAULT_DATE,
+        modified_time=DEFAULT_DATE,
+        height=1,
+        folder=FOLDER_A,
+    )
+    IMAGE_L = Image(
+        id="L",
+        name="Image L [NSFW].png",
+        size=1,
+        created_time=DEFAULT_DATE,
+        modified_time=DEFAULT_DATE,
+        height=1,
+        folder=FOLDER_D,
     )
     IMAGE_FRENCH = Image(
-        id="french", name="French.png", size=1, created_time=DEFAULT_DATE, height=1, folder=FOLDER_FRENCH
+        id="french",
+        name="French.png",
+        size=1,
+        created_time=DEFAULT_DATE,
+        modified_time=DEFAULT_DATE,
+        height=1,
+        folder=FOLDER_FRENCH,
     )
     IMAGE_ENGLISH = Image(
-        id="english", name="{EN} English.png", size=1, created_time=DEFAULT_DATE, height=1, folder=FOLDER_FRENCH
+        id="english",
+        name="{EN} English.png",
+        size=1,
+        created_time=DEFAULT_DATE,
+        modified_time=DEFAULT_DATE,
+        height=1,
+        folder=FOLDER_FRENCH,
     )
-    IMAGE_NSFW = Image(id="nsfw", name="NSFW [NSFW].png", size=1, created_time=DEFAULT_DATE, height=1, folder=FOLDER_A)
+    IMAGE_NSFW = Image(
+        id="nsfw",
+        name="NSFW [NSFW].png",
+        size=1,
+        created_time=DEFAULT_DATE,
+        modified_time=DEFAULT_DATE,
+        height=1,
+        folder=FOLDER_A,
+    )
     IMAGE_DOUBLE_NSFW = Image(
-        id="double nsfw", name="NSFW (NSFW) [NSFW].png", size=1, created_time=DEFAULT_DATE, height=1, folder=FOLDER_A
+        id="double nsfw",
+        name="NSFW (NSFW) [NSFW].png",
+        size=1,
+        created_time=DEFAULT_DATE,
+        modified_time=DEFAULT_DATE,
+        height=1,
+        folder=FOLDER_A,
+    )
+    IMAGE_IMPLICITLY_FRENCH = Image(
+        id="implicitly_french",
+        name="Implicitly French.png",
+        size=1,
+        created_time=DEFAULT_DATE,
+        modified_time=DEFAULT_DATE,
+        height=1,
+        folder=FOLDER_FRENCH,
+    )
+    IMAGE_EXPLICITLY_ENGLISH = Image(
+        id="explicitly_english",
+        name="{EN} Explicitly English.png",
+        size=1,
+        created_time=DEFAULT_DATE,
+        modified_time=DEFAULT_DATE,
+        height=1,
+        folder=FOLDER_FRENCH,
     )
 
     # endregion
@@ -106,19 +244,34 @@ class TestAPI:
         assert folder.get_tags(tags=tags) == expected_tags
 
     @pytest.mark.parametrize(
-        "folder, expected_name",
+        "folder, expected_language, expected_name, expected_tags",
         [
-            (FOLDER_A, "Folder A"),
-            (FOLDER_B, "Folder B"),
-            (FOLDER_C, "Folder C"),
-            (FOLDER_G, "Folder G (Some more words)"),
-            (FOLDER_H, "Folder H [Some more words]"),
+            (FOLDER_A, None, "Folder A", set()),
+            (FOLDER_B, None, "Folder B", set()),
+            (FOLDER_C, None, "Folder C", {"NSFW"}),
+            (FOLDER_G, None, "Folder G (Some more words)", {"Tag in Data"}),
+            (FOLDER_H, None, "Folder H [Some more words]", {"Tag in Data"}),
         ],
     )
-    def test_folder_name(self, django_settings, tag_in_data, extended_tag, full_art_tag, folder, expected_name):
+    def test_folder_name(
+        self,
+        django_settings,
+        tag_in_data,
+        extended_tag,
+        full_art_tag,
+        folder,
+        expected_language,
+        expected_name,
+        expected_tags,
+    ):
         tags = Tags()
-        _, name, _ = folder.unpack_name(tags=tags)
+        language, name, extracted_tags = folder.unpack_name(tags=tags)
+        if expected_language is None:
+            assert language is None
+        else:
+            assert language.alpha_2.lower() == expected_language.lower()
         assert name == expected_name
+        assert extracted_tags == expected_tags
 
     @pytest.mark.parametrize(
         "image, expected_language",
@@ -126,14 +279,18 @@ class TestAPI:
             (IMAGE_A, None),
             (IMAGE_FRENCH, "FR"),
             (IMAGE_ENGLISH, "EN"),
+            (IMAGE_IMPLICITLY_FRENCH, "FR"),
+            (IMAGE_EXPLICITLY_ENGLISH, "EN"),  # despite being in a French folder
         ],
     )
     def test_image_language(self, django_settings, image, expected_language):
         tags = Tags()
         if expected_language is None:
-            assert image.get_language(tags=tags) is None
+            language, _, _, _, _, _ = image.unpack_name(tags=tags)
+            assert language is None
         else:
-            assert image.get_language(tags=tags).alpha_2.lower() == expected_language.lower()
+            language, _, _, _, _, _ = image.unpack_name(tags=tags)
+            assert language.alpha_2.lower() == expected_language.lower()
 
     @pytest.mark.parametrize(
         "image, expected_tags",
@@ -151,28 +308,47 @@ class TestAPI:
     )
     def test_image_tags(self, django_settings, grandchild_tag, extended_tag, full_art_tag, image, expected_tags):
         tags = Tags()
-        assert image.get_tags(tags=tags) == expected_tags
+        _, _, extracted_tags, _, _, _ = image.unpack_name(tags=tags)
+        assert extracted_tags == expected_tags
 
     @pytest.mark.parametrize(
-        "image, expected_name",
+        "image, expected_language, expected_name, expected_tags, expected_extension",
         [
-            (IMAGE_A, "Image A"),
-            (IMAGE_B, "Image B"),
-            (IMAGE_C, "Image C"),
-            (IMAGE_D, "Image D"),
-            (IMAGE_E, "Image E [invalid tag"),
-            (IMAGE_F, "Image F"),
-            (IMAGE_G, "Image G (John Doe)"),
-            (IMAGE_H, "Image H [A, B] (John Doe)"),
-            (IMAGE_I, "Image A.I"),
-            (IMAGE_NSFW, "NSFW"),
-            (IMAGE_DOUBLE_NSFW, "NSFW"),
+            (IMAGE_A, None, "Image A", set(), "png"),
+            (IMAGE_B, None, "Image B", {"NSFW"}, "png"),
+            (IMAGE_C, None, "Image C", {"NSFW"}, "png"),  # tag inherited from parent
+            (IMAGE_D, None, "Image D", {"NSFW", "Full Art"}, "png"),
+            (IMAGE_E, None, "Image E [invalid tag", set(), "png"),
+            (IMAGE_F, None, "Image F", {"NSFW", "Tag in Data"}, "png"),
+            (IMAGE_G, None, "Image G (John Doe)", {"NSFW"}, "png"),
+            (IMAGE_H, None, "Image H [A, B] (John Doe)", {"NSFW"}, "png"),
+            (IMAGE_I, None, "Image A.I", set(), "png"),
+            (IMAGE_L, None, "Image L", {"NSFW", "Tag in Data"}, "png"),  # first tag from folder, second from image
+            (IMAGE_NSFW, None, "NSFW", {"NSFW"}, "png"),
+            (IMAGE_DOUBLE_NSFW, None, "NSFW", {"NSFW"}, "png"),
         ],
     )
-    def test_image_name(self, django_settings, tag_in_data, extended_tag, full_art_tag, image, expected_name):
+    def test_unpack_name(
+        self,
+        django_settings,
+        tag_in_data,
+        extended_tag,
+        full_art_tag,
+        image,
+        expected_language,
+        expected_name,
+        expected_tags,
+        expected_extension,
+    ):
         tags = Tags()
-        _, name, _, _ = image.unpack_name(tags=tags)
+        language, name, extracted_tags, extension, _, _ = image.unpack_name(tags=tags)
+        if expected_language is None:
+            assert language is None
+        else:
+            assert language.alpha_2.lower() == expected_language.lower()
         assert name == expected_name
+        assert extracted_tags == expected_tags
+        assert extension == expected_extension
 
 
 # endregion
@@ -185,12 +361,320 @@ class TestUpdateDatabase:
         update_database()
         assert list(Card.objects.all().order_by("identifier")) == snapshot(name="cards")
 
-    @pytest.mark.skip("we turned off upsert at time of writing because it's extremely slow with postgres")
     def test_upsert(self, django_settings, elasticsearch, all_sources):
         update_database()
         pk_to_identifier_1 = {x.pk: x.identifier for x in Card.objects.all()}
         update_database()
         pk_to_identifier_2 = {x.pk: x.identifier for x in Card.objects.all()}
         assert pk_to_identifier_1 == pk_to_identifier_2
+
+    @pytest.mark.parametrize(
+        "existing_cards, incoming_cards",
+        [
+            pytest.param(
+                [],
+                [],
+                id="no changes to empty database",
+            ),
+            pytest.param(
+                [("existing", "Existing Card", DEFAULT_DATE, tuple())],
+                [("existing", "Existing Card", DEFAULT_DATE, tuple())],
+                id="no changes to populated database",
+            ),
+            pytest.param(
+                [],
+                [("created", "Created Card", DEFAULT_DATE, tuple())],
+                id="create one card",
+            ),
+            pytest.param(
+                [("updated", "Card to Update", DEFAULT_DATE, tuple())],
+                [("updated", "Updated Card", DEFAULT_DATE + dt.timedelta(days=1), tuple())],
+                id="update one card",
+            ),
+            pytest.param(
+                [("updated", "Card to Update (Tag in Data)", DEFAULT_DATE, tuple())],
+                [("updated", "Updated Card (Tag in Data)", DEFAULT_DATE, ("Tag in Data",))],
+                id="update one card - changes to tags but not modified on source side",
+            ),
+            pytest.param(
+                [("deleted", "Card to Delete", DEFAULT_DATE, tuple())],
+                [],
+                id="delete one card",
+            ),
+            pytest.param(
+                [("updated", "Card to Update", DEFAULT_DATE, set()), ("deleted", "Card to Delete", DEFAULT_DATE, [])],
+                [
+                    ("created", "Created Card", DEFAULT_DATE, tuple()),
+                    ("updated", "Updated Card", DEFAULT_DATE + dt.timedelta(days=1), tuple()),
+                ],
+                id="create + update + delete",
+            ),
+            pytest.param(
+                [("existing", "Existing Card", DEFAULT_DATE, tuple())],
+                [
+                    ("existing", "Existing Card", DEFAULT_DATE, tuple()),
+                    ("created", "Created Card", DEFAULT_DATE, tuple()),
+                ],
+                id="create one card while another card exists and is not modified",
+            ),
+        ],
+    )
+    @freezegun.freeze_time(DEFAULT_DATE)
+    def test_bulk_sync_objects(
+        self, django_settings, elasticsearch, tag_in_data, example_drive_1, existing_cards, incoming_cards
+    ):
+        # arrange - set up database and elasticsearch according to `existing_cards`
+        source = factories.SourceFactory()
+        for (identifier, searchq, date_modified, tags) in existing_cards:
+            factories.CardFactory(
+                identifier=identifier,
+                searchq=searchq,
+                date_created=make_aware(DEFAULT_DATE),
+                date_modified=make_aware(date_modified),
+                source=source,
+                tags=list(tags),
+            )
+        management.call_command("search_index", "--rebuild", "-f")
+
+        # act
+        bulk_sync_objects(
+            source=source,
+            cards=[
+                Card(
+                    identifier=identifier,
+                    searchq=searchq,
+                    date_created=make_aware(DEFAULT_DATE),
+                    date_modified=make_aware(date_modified),
+                    source=source,
+                    tags=list(tags),
+                    # not strictly relevant for this test, but values for these non-nullable fields are required.
+                    size=0,
+                    image_hash=0,
+                )
+                for (identifier, searchq, date_modified, tags) in incoming_cards
+            ],
+        )
+
+        # assert - database and elasticsearch should now match `incoming_cards`
+        assert {
+            (card.identifier, card.searchq, make_naive(card.date_modified), tuple(sorted(card.tags)))
+            for card in Card.objects.all()
+        } == set(incoming_cards)
+        assert {
+            (result.identifier, result.searchq_keyword, make_naive(result.date_modified), tuple(sorted(result.tags)))
+            for result in CardSearch().search().scan()
+        } == set(incoming_cards)
+
+    @pytest.mark.parametrize(
+        "canonical_cards, new_card, expected_expansion, expected_collector_number",
+        [
+            pytest.param(
+                [
+                    ("Lightning Bolt", "LEA", "161"),
+                ],
+                "Lightning Bolt (LEA 161).jpg",
+                "LEA",
+                "161",
+                id="card name specifies valid expansion+collector number, match",
+            ),
+            pytest.param(
+                [
+                    ("Lightning Bolt", "LEA", "161"),
+                    ("Lightning Bolt", "M10", "146"),
+                ],
+                "Lightning Bolt (LEA 161).jpg",
+                "LEA",
+                "161",
+                id="card name specifies valid expansion+collector number, match between two options",
+            ),
+            pytest.param(
+                [
+                    ("Lightning Bolt", "LEA", "161"),
+                    ("Lightning Bolt", "M10", "146"),
+                ],
+                "Lightning Bolt.jpg",
+                None,
+                None,
+                id="card name does not specify expansion+collector number, no match",
+            ),
+            pytest.param(
+                [
+                    ("Lightning Bolt", "LEA", "161"),
+                    ("Lightning Bolt", "M10", "146"),
+                ],
+                "Lightning Bolt (LEA 123).jpg",
+                None,
+                None,
+                id="card name specifies invalid option, no match",
+            ),
+            pytest.param(
+                [
+                    ("Lightning Bolt", "LEA", "161"),
+                    ("Lightning Bolt", "M10", "146"),
+                ],
+                "Lightning Bolt (LEA 161, M10 146).jpg",
+                None,
+                None,
+                id="card name specifies multiple valid expansion+collector numbers, ambiguous, no match",
+            ),
+            pytest.param(
+                [
+                    ("Lightning Bolt", "LEA", "161"),
+                ],
+                "Lightning Bolt (LEA) {161}.jpg",
+                "LEA",
+                "161",
+                id="card name specifies valid expansion+collector number with special syntax, match",
+            ),
+            pytest.param(
+                [
+                    ("Lightning Bolt", "LEA", "161"),
+                ],
+                "Lightning Bolt (LEA) {161} (some other tag).jpg",
+                "LEA",
+                "161",
+                id="{collector number} specified not at end of name, match",
+            ),
+            pytest.param(
+                [
+                    ("Lightning Bolt", "LEA", "161"),
+                ],
+                "Lightning Bolt (LEA 161) {161}.jpg",
+                None,
+                None,
+                id="card name co-mingles expansion+collector number with special collector number syntax, no match",
+            ),
+        ],
+    )
+    def test_associate_with_canonical_card(
+        self, django_settings, canonical_cards, new_card, expected_expansion, expected_collector_number
+    ):
+        for (name, expansion, collector_number) in canonical_cards:
+            CanonicalCardFactory.create(
+                name=name,
+                expansion=CanonicalExpansionFactory(code=expansion),
+                collector_number=collector_number,
+                image_hash=0,
+                small_thumbnail_url="",
+                medium_thumbnail_url="",
+            )
+        _, _, _, _, match, _ = Image(
+            id="",
+            name=new_card,
+            size=0,
+            created_time=dt.datetime(2026, 1, 1),
+            modified_time=dt.datetime(2026, 1, 1),
+            height=0,
+            folder=Folder(id="", name="", parent=None),
+        ).unpack_name(tags=Tags())
+        canonical_cards_by_pk = {card.pk: card for card in CanonicalCard.objects.all()}
+        if expected_expansion is not None and expected_collector_number is not None:
+            assert canonical_cards_by_pk[match].expansion.code == expected_expansion
+            assert canonical_cards_by_pk[match].collector_number == expected_collector_number
+        else:
+            assert match is None
+
+    @pytest.mark.parametrize(
+        "canonical_cards, canonical_artists, new_card, expected_artist",
+        [
+            pytest.param(
+                [
+                    ("Lightning Bolt", "LEA", "161"),
+                ],
+                [
+                    "Wayne Reynolds",
+                ],
+                "Lightning Bolt.jpg",
+                None,
+                id="card name does not specify valid artist name, no match",
+            ),
+            pytest.param(
+                [
+                    ("Lightning Bolt", "LEA", "161"),
+                ],
+                [
+                    "Wayne Reynolds",
+                ],
+                "Lightning Bolt (Wayne Reynolds).jpg",
+                "Wayne Reynolds",
+                id="card name specifies valid artist name, match",
+            ),
+            pytest.param(
+                [
+                    ("Lightning Bolt", "LEA", "161"),
+                ],
+                [
+                    "Wayne Reynolds",
+                    "Karl Kopinski",
+                ],
+                "Lightning Bolt (Wayne Reynolds).jpg",
+                "Wayne Reynolds",
+                id="card name specifies valid artist name out of two options, match",
+            ),
+            pytest.param(
+                [
+                    ("Lightning Bolt", "LEA", "161"),
+                ],
+                [
+                    "Wayne Reynolds",
+                    "Karl Kopinski",
+                ],
+                "Lightning Bolt (Wayne Reynolds, Karl Kopinski).jpg",
+                None,
+                id="card name specifies multiple valid artist names, ambiguous, no match",
+            ),
+            pytest.param(
+                [
+                    ("Lightning Bolt", "LEA", "161"),
+                ],
+                [
+                    "Wayne Reynolds",
+                ],
+                "Lightning Bolt (LEA 161).jpg",
+                None,
+                id="card name specifies valid expansion+collector number, no artist match",
+            ),
+            pytest.param(
+                [
+                    ("Lightning Bolt", "LEA", "161"),
+                ],
+                [
+                    "Wayne Reynolds",
+                ],
+                "Lightning Bolt (LEA 161, Wayne Reynolds).jpg",
+                None,
+                id="card name specifies valid expansion+collector number, no artist match even though artist specified",
+            ),
+        ],
+    )
+    def test_associate_with_canonical_artist(
+        self, django_settings, canonical_cards, canonical_artists, new_card, expected_artist
+    ):
+        for (name, expansion, collector_number) in canonical_cards:
+            CanonicalCardFactory.create(
+                name=name,
+                expansion=CanonicalExpansionFactory(code=expansion),
+                collector_number=collector_number,
+                image_hash=0,
+                small_thumbnail_url="",
+                medium_thumbnail_url="",
+            )
+        for artist_name in canonical_artists:
+            CanonicalArtistFactory.create(name=artist_name)
+        _, _, _, _, canonical_card_id, canonical_artist_id = Image(
+            id="",
+            name=new_card,
+            size=0,
+            created_time=dt.datetime(2026, 1, 1),
+            modified_time=dt.datetime(2026, 1, 1),
+            height=0,
+            folder=Folder(id="", name="", parent=None),
+        ).unpack_name(tags=Tags())
+        canonical_artists_by_pk = {artist.pk: artist for artist in CanonicalArtist.objects.all()}
+        if expected_artist is not None:
+            assert canonical_artists_by_pk[canonical_artist_id].name == expected_artist
+            assert canonical_card_id is None
+        else:
+            assert canonical_artist_id is None
 
     # endregion

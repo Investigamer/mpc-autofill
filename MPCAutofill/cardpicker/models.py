@@ -2,16 +2,30 @@ import itertools
 import uuid
 from collections import defaultdict
 from datetime import datetime
+from functools import cached_property, lru_cache
 from typing import Any, Optional
 
+from bulk_sync import bulk_sync
 from django.contrib.auth.models import User
 from django.contrib.postgres.fields import ArrayField
 from django.db import connection, models, transaction
 from django.utils import dateformat, timezone
 from django.utils.translation import gettext_lazy
+from encrypted_fields import EncryptedTextField
 
 from cardpicker.constants import DATE_FORMAT
+from cardpicker.schema_types import CanonicalArtistClass as SerialisedCanonicalArtist
+from cardpicker.schema_types import CanonicalCardClass as SerialisedCanonicalCard
+from cardpicker.schema_types import Card as SerialisedCard
+from cardpicker.schema_types import CardType, ChildElement, Game
+from cardpicker.schema_types import Source as SerialisedSource
+from cardpicker.schema_types import SourceContribution, SourceType
+from cardpicker.schema_types import Tag as SerialisedTag
 from cardpicker.sources.source_types import SourceTypeChoices
+
+
+class Games(models.TextChoices):
+    MTG = (Game.MTG.value, gettext_lazy(Game.MTG.value))
 
 
 class Faces(models.TextChoices):
@@ -20,9 +34,9 @@ class Faces(models.TextChoices):
 
 
 class CardTypes(models.TextChoices):
-    CARD = ("CARD", gettext_lazy("Card"))
-    CARDBACK = ("CARDBACK", gettext_lazy("Cardback"))
-    TOKEN = ("TOKEN", gettext_lazy("Token"))
+    CARD = (CardType.CARD.name, gettext_lazy(CardType.CARD.value.title()))
+    CARDBACK = (CardType.CARDBACK.name, gettext_lazy(CardType.CARDBACK.value.title()))
+    TOKEN = (CardType.TOKEN.name, gettext_lazy(CardType.TOKEN.value.title()))
 
 
 class Cardstocks(models.TextChoices):
@@ -35,6 +49,66 @@ class Cardstocks(models.TextChoices):
     P10_NONFOIL = ("P10_NONFOIL", gettext_lazy("P10 (Plastic)"))
 
 
+class CanonicalExpansion(models.Model):
+    identifier = models.UUIDField(unique=True)
+    code = models.CharField(unique=True)
+    name = models.CharField(unique=True)
+    game = models.CharField(max_length=20, choices=Games.choices)
+
+    def __str__(self) -> str:
+        return f"[{self.code.upper()}] {self.name}"
+
+
+class CanonicalArtist(models.Model):
+    name = models.CharField(unique=True)
+
+    def __str__(self) -> str:
+        return self.name
+
+    def serialise(self) -> SerialisedCanonicalArtist:
+        return SerialisedCanonicalArtist(name=self.name)
+
+
+class CanonicalCard(models.Model):
+    identifier = models.UUIDField(unique=True)
+    canonical_id = models.UUIDField(null=True, blank=True)
+    name = models.TextField(db_index=True)
+    artist = models.ForeignKey(to=CanonicalArtist, on_delete=models.CASCADE)
+    expansion = models.ForeignKey(to=CanonicalExpansion, on_delete=models.CASCADE)
+    collector_number = models.CharField(max_length=16)
+    is_default = models.BooleanField(default=False)
+    image_hash = models.BigIntegerField()
+    small_thumbnail_url = models.CharField()
+    medium_thumbnail_url = models.CharField()
+
+    def __str__(self) -> str:
+        return f"{self.name} [{self.expansion.code.upper()} {self.collector_number}]"
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["expansion", "collector_number"],
+                name="canonicalcard_unique_expansion_collector_number",
+            ),
+            models.UniqueConstraint(
+                fields=["canonical_id"],
+                condition=models.Q(is_default=True),
+                name="canonicalcard_unique_default_per_canonical_id",
+            ),
+        ]
+
+    def serialise(self) -> SerialisedCanonicalCard:
+        return SerialisedCanonicalCard(
+            canonicalId=str(self.canonical_id),
+            collectorNumber=self.collector_number,
+            expansionCode=self.expansion.code,
+            expansionName=self.expansion.name,
+            identifier=str(self.identifier),
+            smallThumbnailUrl=self.small_thumbnail_url,
+            mediumThumbnailUrl=self.medium_thumbnail_url,
+        )
+
+
 class Source(models.Model):
     key = models.CharField(max_length=50, unique=True)  # must be a valid HTML id
     user = models.ForeignKey(to=User, on_delete=models.SET_NULL, null=True, blank=True)
@@ -45,7 +119,12 @@ class Source(models.Model):
     )
     external_link = models.CharField(max_length=200, blank=True, null=True)
     description = models.CharField(max_length=400, blank=True)
-    ordinal = models.IntegerField(default=0)  # TODO: why is this not unique?
+    ordinal = models.PositiveIntegerField(default=0, db_index=True)
+    is_paused = models.BooleanField(default=False, verbose_name="Paused")
+    is_public = models.BooleanField(default=False, verbose_name="Public")
+
+    class Meta:
+        ordering = ["ordinal"]
 
     def __str__(self) -> str:
         (qty_total, qty_cards, qty_cardbacks, qty_tokens, _) = self.count()
@@ -54,54 +133,124 @@ class Source(models.Model):
             f"[{qty_total} total: {qty_cards} cards, {qty_cardbacks} cardbacks, {qty_tokens} tokens]"
         )
 
-    def count(self) -> tuple[str, str, str, str, float]:
-        # return the number of cards that this Source created, and the Source's average DPI
-        qty_cards = Card.objects.filter(source=self).filter(card_type=CardTypes.CARD).count()
-        qty_cardbacks = Card.objects.filter(source=self).filter(card_type=CardTypes.CARDBACK).count()
-        qty_tokens = Card.objects.filter(source=self).filter(card_type=CardTypes.TOKEN).count()
-        qty_all = qty_cards + qty_cardbacks + qty_tokens
+    """ Class Methods """
 
-        # if this source has any cards/cardbacks/tokens, average the dpi of all of their things
-        avg_dpi = 0
-        if qty_all > 0:
-            avg_dpi = int(
-                (Card.objects.filter(source=self).aggregate(models.Sum("dpi"))["dpi__sum"] if qty_cards > 0 else 0)
-                / qty_all
+    @classmethod
+    def sync_ordinals(cls) -> None:
+        """Rewrites ordinals across all sources in their current order, incrementing from 1."""
+        objects_to_sync = []
+        for i, obj in enumerate(cls.objects.order_by("-ordinal"), start=1):
+            obj.ordinal = i
+            objects_to_sync.append(obj)
+        bulk_sync(new_models=objects_to_sync, key_fields=("key",), filters=None, db_class=cls)
+
+    @classmethod
+    def get_next_ordinal(cls) -> int:
+        """Returns an integer value equal to the current highest `ordinal` value in the Source model plus 1."""
+        if cls.objects.count() == 0:
+            return 1
+        return cls.objects.order_by("-ordinal").first().ordinal + 1
+
+    """ Computed Properties """
+
+    @cached_property
+    def last_active(self) -> datetime:
+        return Card.objects.order_by('-date').first().date_modified
+
+    @cached_property
+    def source_label(self) -> str:
+        """Return the human-readable label for the source type."""
+        return str(SourceTypeChoices[self.source_type].label)
+
+    @cached_property
+    def qty_cards(self) -> int:
+        """Returns the number of card images provided by this source."""
+        return Card.objects.filter(source=self).filter(card_type=CardTypes.CARD).count()
+
+    @cached_property
+    def qty_cardbacks(self) -> int:
+        """Returns the number of cardback images provided by this source."""
+        return Card.objects.filter(source=self).filter(card_type=CardTypes.CARDBACK).count()
+
+    @cached_property
+    def qty_tokens(self) -> int:
+        """Returns the number of token images provided by this source."""
+        return Card.objects.filter(source=self).filter(card_type=CardTypes.TOKEN).count()
+
+    @cached_property
+    def qty_all(self) -> int:
+        """Returns the number of all images provided by this source."""
+        return self.qty_cards + self.qty_cardbacks + self.qty_tokens
+
+    @cached_property
+    def dpi_average(self) -> int:
+        """Return the average DPI of all images provided by this source."""
+        if self.qty_all > 0:
+            return int(
+                Card.objects.filter(source=self).aggregate(models.Sum("dpi"))["dpi__sum"] / self.qty_all
             )
+        return 0
+
+    """ ORM Hooks """
+
+    def pre_save_validation(self) -> None:
+        """Perform necessary dynamic field validations, typically before saving an object."""
+
+        # Clear external link if marked private, if marked public generate one when not provided
+        if not self.is_public:
+            self.external_link = ""
+        else:
+            self.external_link = self.get_external_link()
+
+        # For a null value, get the next ordinal increment
+        if self.ordinal in [0, None, ""]:
+            self.ordinal = Source.get_next_ordinal()
+
+    def save(self, *args, **kwargs):
+        """Hook the process of saving new objects or updated objects to make changes to
+            default behavior when necessary.
+
+        Notes:
+            Is NOT automatically called when an object is saved during bulk actions like `bulk_sync`.
+        """
+        self.pre_save_validation()
+        super().save(*args, **kwargs)
+
+    """ Methods """
+
+    def get_external_link(self) -> str:
+        """Returns the external URL of this source, or an empty string if the SourceType isn't implemented."""
+        if self.source_type == SourceTypeChoices.GOOGLE_DRIVE:
+            return f"https://drive.google.com/open?id={self.identifier}"
+        # Todo: Implement for other source types
+        return ""
+
+    def count(self) -> tuple[str, str, str, str, float]:
+        """Returns the number of cards that this Source created and the Source's average DPI."""
         return (
-            f"{qty_all :,d}",
-            f"{qty_cards :,d}",
-            f"{qty_cardbacks :,d}",
-            f"{qty_tokens :,d}",
-            avg_dpi,
+            str(self.qty_all),
+            str(self.qty_cards),
+            str(self.qty_cardbacks),
+            str(self.qty_tokens),
+            self.dpi_average
         )
 
-    class Meta:
-        ordering = ["ordinal"]
+    def serialise(self) -> SerialisedSource:
+        # note: `identifier` should not be exposed here.
+        return SerialisedSource(
+            pk=self.pk,
+            key=self.key,
+            name=self.name,
+            sourceType=SourceType(SourceTypeChoices[self.source_type].label),
+            externalLink=self.external_link,
+            description=self.description,
+        )
 
-    def to_dict(self, count: bool = False) -> dict[str, Any]:
-        source_dict = {
-            "pk": self.pk,
-            "key": self.key,
-            "name": self.name,
-            "identifier": self.identifier,
-            "source_type": SourceTypeChoices[self.source_type].label,
-            "external_link": self.external_link,
-            "description": self.description,
-        }
-        if not count:
-            return source_dict
-        qty_all, qty_cards, qty_cardbacks, qty_tokens, avgdpi = self.count()
-        return source_dict | {
-            "qty_all": qty_all,
-            "qty_cards": qty_cards,
-            "qty_cardbacks": qty_cardbacks,
-            "qty_tokens": qty_tokens,
-            "avgdpi": avgdpi,
-        }
+    def to_dict(self) -> dict[str, Any]:
+        return self.serialise().model_dump()
 
 
-def summarise_contributions() -> tuple[list[dict[str, Any]], dict[str, int], int]:
+def summarise_contributions() -> tuple[list[SourceContribution], dict[str, int], int]:
     """
     Report on the number of cards, cardbacks, and tokens that each Source has, as well as the average DPI across all
     three card types.
@@ -149,7 +298,7 @@ def summarise_contributions() -> tuple[list[dict[str, Any]], dict[str, int], int
 
     source_card_count_by_type: dict[str, dict[str, int]] = defaultdict(dict)
     card_count_by_type: dict[str, int] = {card_type: 0 for card_type in CardTypes}
-    for (identifier, card_type, count) in results_2:
+    for identifier, card_type, count in results_2:
         if card_type is not None:
             source_card_count_by_type[identifier][card_type] = count
             card_count_by_type[card_type] += count
@@ -166,19 +315,19 @@ def summarise_contributions() -> tuple[list[dict[str, Any]], dict[str, int], int
         total_count,
         total_size,
     ) in results_1:
+        # note: `identifier` should not be exposed here.
         sources.append(
-            {
-                "name": name,
-                "identifier": identifier,
-                "source_type": SourceTypeChoices[source_type].label,
-                "external_link": external_link,
-                "description": description,
-                "qty_cards": f"{source_card_count_by_type[identifier].get(CardTypes.CARD, 0):,d}",
-                "qty_cardbacks": f"{source_card_count_by_type[identifier].get(CardTypes.CARDBACK, 0) :,d}",
-                "qty_tokens": f"{source_card_count_by_type[identifier].get(CardTypes.TOKEN, 0) :,d}",
-                "avgdpi": f"{(total_dpi / total_count):.2f}" if total_count > 0 else 0,
-                "size": f"{(total_size / 1_000_000_000):.2f} GB",
-            }
+            SourceContribution(
+                name=name,
+                sourceType=SourceType(SourceTypeChoices[source_type].label),
+                externalLink=external_link,
+                description=description,
+                qtyCards=f"{source_card_count_by_type[identifier].get(CardTypes.CARD, 0):,d}",
+                qtyCardbacks=f"{source_card_count_by_type[identifier].get(CardTypes.CARDBACK, 0) :,d}",
+                qtyTokens=f"{source_card_count_by_type[identifier].get(CardTypes.TOKEN, 0) :,d}",
+                avgdpi=f"{(total_dpi / total_count):.2f}" if total_count > 0 else "0",
+                size=f"{(total_size / 1_000_000_000):.2f} GB",
+            )
         )
         total_database_size += total_size
     return sources, card_count_by_type, total_database_size
@@ -194,12 +343,20 @@ class Card(models.Model):
     folder_location = models.CharField(max_length=300)
     dpi = models.IntegerField(default=0)
     searchq = models.CharField(max_length=200)
-    searchq_keyword = models.CharField(max_length=200)
     extension = models.CharField(max_length=200)
-    date = models.DateTimeField(default=datetime.now)
+    date_created = models.DateTimeField(default=timezone.now)
+    date_modified = models.DateTimeField(default=timezone.now)
     size = models.IntegerField()
     tags = ArrayField(models.CharField(max_length=20), default=list, blank=True)  # null=True is just for admin panel
     language = models.CharField(max_length=5)
+    canonical_card = models.ForeignKey(
+        CanonicalCard, on_delete=models.SET_NULL, blank=True, null=True, related_name="canonical_card"
+    )
+    canonical_artist = models.ForeignKey(to=CanonicalArtist, on_delete=models.CASCADE, blank=True, null=True)
+    inferred_canonical_card = models.ForeignKey(
+        CanonicalCard, on_delete=models.SET_NULL, blank=True, null=True, related_name="inferred_canonical_card"
+    )
+    image_hash = models.BigIntegerField()
 
     def __str__(self) -> str:
         return (
@@ -208,37 +365,50 @@ class Card(models.Model):
             f"{self.name} "
             f"[Type: {self.card_type}, "
             f"Identifier: {self.identifier}, "
-            f"Uploaded: {self.date.strftime('%d/%m/%Y')}, "
+            f"Uploaded: {self.date_created.strftime('%d/%m/%Y')}, "
             f"Priority: {self.priority}]"
         )
 
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "identifier": self.identifier,
-            "card_type": self.card_type,
-            "name": self.name,
-            "priority": self.priority,
+    def serialise(self) -> SerialisedCard:
+        return SerialisedCard(
+            identifier=self.identifier,
+            cardType=CardType(self.card_type),
+            name=self.name,
+            priority=self.priority,
             # TODO: consider only including source_pk here. reference the other data from sourceDocuments in frontend
-            "source": self.source.key,
-            "source_name": self.source.name,
-            "source_id": self.source.pk,
-            "source_verbose": self.source_verbose,
-            "source_type": self.get_source_type(),
-            "source_external_link": self.get_source_external_link(),
-            "dpi": self.dpi,
-            "searchq": self.searchq,
-            "extension": self.extension,
-            "date": dateformat.format(self.date, DATE_FORMAT),
-            "size": self.size,
-            "download_link": self.get_download_link(),
-            "small_thumbnail_url": self.get_small_thumbnail_url(),
-            "medium_thumbnail_url": self.get_medium_thumbnail_url(),
-            "tags": sorted(self.tags),
-            "language": self.language,
-        }
+            source=self.source.key,
+            sourceName=self.source.name,
+            sourceId=self.source.pk,
+            sourceVerbose=self.source_verbose,
+            sourceType=self.get_source_type(),
+            sourceExternalLink=self.get_source_external_link(),
+            dpi=self.dpi,
+            searchq=self.searchq,
+            extension=self.extension,
+            dateCreated=dateformat.format(self.date_created, DATE_FORMAT),
+            dateModified=dateformat.format(self.date_modified, DATE_FORMAT),
+            size=self.size,
+            smallThumbnailUrl=self.get_small_thumbnail_url() or "",
+            mediumThumbnailUrl=self.get_medium_thumbnail_url() or "",
+            tags=sorted(self.tags),
+            language=self.language,
+            canonicalCard=(
+                self.canonical_card.serialise()
+                if self.canonical_card
+                else (self.inferred_canonical_card.serialise() if self.inferred_canonical_card else None)
+            ),
+            canonicalArtist=(
+                self.canonical_artist.serialise()
+                if self.canonical_artist
+                else (self.canonical_card.artist.serialise() if self.canonical_card else None)
+            ),
+        )
 
-    def get_source_key(self) -> str:
-        return self.source.key
+    def to_dict(self) -> dict[str, Any]:
+        return self.serialise().model_dump()
+
+    def get_source_pk(self) -> int:
+        return self.source.pk
 
     def get_source_name(self) -> str:
         return self.source.name
@@ -246,21 +416,19 @@ class Card(models.Model):
     def get_source_external_link(self) -> Optional[str]:
         return self.source.external_link or None
 
-    def get_source_type(self) -> str:
-        return SourceTypeChoices[self.source.source_type].label
+    def get_source_type(self) -> SourceType:
+        return SourceType(SourceTypeChoices[self.source.source_type].label)
 
-    def get_download_link(self) -> Optional[str]:
-        return SourceTypeChoices.get_source_type(SourceTypeChoices[self.source.source_type]).get_download_link(
-            self.identifier
-        )
+    def get_source_type_choices(self) -> SourceTypeChoices:
+        return SourceTypeChoices.from_source_type_schema(self.get_source_type())
 
     def get_small_thumbnail_url(self) -> Optional[str]:
-        return SourceTypeChoices.get_source_type(SourceTypeChoices[self.source.source_type]).get_small_thumbnail_url(
+        return SourceTypeChoices.get_source_type(self.get_source_type_choices()).get_small_thumbnail_url(
             self.identifier
         )
 
     def get_medium_thumbnail_url(self) -> Optional[str]:
-        return SourceTypeChoices.get_source_type(SourceTypeChoices[self.source.source_type]).get_medium_thumbnail_url(
+        return SourceTypeChoices.get_source_type(self.get_source_type_choices()).get_medium_thumbnail_url(
             self.identifier
         )
 
@@ -272,19 +440,28 @@ class Tag(models.Model):
     name = models.CharField(unique=True)
     # null=True is just for admin panel
     aliases = ArrayField(models.CharField(max_length=200), default=list, blank=True)
+    is_enabled_by_default = models.BooleanField(default=True)
     parent = models.ForeignKey(to="Tag", null=True, blank=True, on_delete=models.SET_NULL)
 
     def __str__(self) -> str:
         return self.name
 
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "name": self.name,
-            "aliases": self.aliases,
-            "parent": (self.parent.name if self.parent else None),
+    def serialise(self) -> SerialisedTag:
+        return SerialisedTag(
+            name=self.name,
+            aliases=self.aliases,
+            isEnabledByDefault=self.is_enabled_by_default,
+            parent=(self.parent.name if self.parent else None),
             # recursively serialise each child tag
-            "children": [x.to_dict() for x in self.tag_set.order_by("name").all()] if self.pk is not None else [],
-        }
+            children=(
+                [ChildElement(**x.to_dict()) for x in self.tag_set.order_by("name").all()]
+                if self.pk is not None
+                else []
+            ),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return self.serialise().model_dump()
 
     @classmethod
     def get_tags(cls) -> dict[str, list[str]]:
@@ -351,8 +528,18 @@ class Project(models.Model):
                     if (card_identifier := record.get("card_identifier"), None) is not None:
                         card_identifiers.add(card_identifier)
 
+        card_identifiers_to_pk: dict[str, Card] = {
+            x.identifier: x for x in Card.objects.filter(identifier__in=card_identifiers)
+        }
         members: list[ProjectMember] = [
-            ProjectMember(card_id=value.get("card_identifier", None), slot=value["slot"], query=query, face=face)
+            ProjectMember(
+                card=card_identifiers_to_pk[card_identifier]
+                if (card_identifier := value.get("card_identifier", None)) is not None
+                else None,
+                slot=value["slot"],
+                query=query,
+                face=face,
+            )
             for face in Faces
             if (face_members := records.get(face, None)) is not None
             for query, values in face_members.items()
@@ -378,25 +565,82 @@ class Project(models.Model):
 
 
 class ProjectMember(models.Model):
-    card_id = models.CharField(max_length=200, null=True, blank=True)
+    card = models.ForeignKey(to=Card, on_delete=models.SET_NULL, null=True, blank=True)
     project = models.ForeignKey(to=Project, on_delete=models.CASCADE)
     query = models.CharField(max_length=200)
     slot = models.IntegerField()
     face = models.CharField(max_length=5, choices=Faces.choices, default=Faces.FRONT)
 
     class Meta:
-        constraints = [
-            models.UniqueConstraint(fields=["card_id", "project", "slot", "face"], name="projectmember_unique")
-        ]
+        constraints = [models.UniqueConstraint(fields=["card", "project", "slot", "face"], name="projectmember_unique")]
 
     def to_dict(self) -> dict[str, Any]:
-        return {"card_identifier": self.card_id, "query": self.query, "slot": self.slot, "face": self.face}
+        return {
+            "card_identifier": self.card.identifier if self.card else None,
+            "query": self.query,
+            "slot": self.slot,
+            "face": self.face,
+        }
+
+
+class SiteSecret(models.Model):
+    """Model for storing encrypted site secrets.
+
+    Notes:
+        If SECRET_KEY or SALT_KEY changes, values in this table will become inaccessible and must be reingested.
+        Should be used for sensitive and generally transient data.
+    """
+    key = models.CharField(max_length=50, unique=True)
+    value = EncryptedTextField()
+
+    class Meta:
+        verbose_name = "Site Secret"
+        verbose_name_plural = "Site Secrets"
+
+    @classmethod
+    @lru_cache()
+    def get_secret(cls, key: str) -> str:
+        """Get secret from database.
+
+        Args:
+            key: Site secret key.
+
+        Returns:
+            str: The secret value.
+
+        Raises:
+            KeyError: If key is not in database.
+        """
+        _filtered = cls.objects.filter(key=key)
+        if _filtered.exists():
+            return _filtered.first().value
+        raise KeyError(f"SiteSecret key does not exist: {key}")
+
+    @classmethod
+    def get_secret_or_none(cls, key: str) -> Optional[str]:
+        """Get secret or None if key does not exist."""
+        try:
+            return cls.get_secret(key)
+        except KeyError:
+            return None
+
+    @classmethod
+    def set_secret(cls, key: str, value: str):
+        """Set site secret."""
+        _item, _created = cls.objects.update_or_create(
+            key=key, defaults={"value": value}
+        )
+        cls.get_secret.cache_clear()
 
 
 __all__ = [
     "Faces",
     "CardTypes",
     "Cardstocks",
+    "Games",
+    "CanonicalArtist",
+    "CanonicalExpansion",
+    "CanonicalCard",
     "Source",
     "summarise_contributions",
     "Card",
@@ -405,4 +649,5 @@ __all__ = [
     "get_default_cardback",
     "Project",
     "ProjectMember",
+    "SiteSecret"
 ]

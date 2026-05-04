@@ -2,8 +2,9 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Type
 
-from cardpicker.integrations.base import GameIntegration, ImportSite
+from cardpicker.integrations.game.base import GameIntegration, ImportSite
 from cardpicker.models import DFCPair
+from cardpicker.schema_types import Game
 from cardpicker.sources.source_types import SourceTypeChoices
 from cardpicker.tests.factories import DFCPairFactory
 
@@ -119,6 +120,24 @@ class Cards(Enum):
         size=5_000_000,
     )
 
+    @classmethod
+    def get_all_cards(cls) -> list[Card]:
+        return [
+            cls.BRAINSTORM.value,
+            cls.DELVER_OF_SECRETS.value,
+            cls.GOBLIN.value,
+            cls.HUNTMASTER_OF_THE_FELLS.value,
+            cls.INSECTILE_ABERRATION.value,
+            cls.ISLAND_CLASSICAL.value,
+            cls.ISLAND.value,
+            cls.MOUNTAIN.value,
+            cls.PAST_IN_FLAMES_2.value,
+            cls.PAST_IN_FLAMES_1.value,
+            cls.RAVAGER_OF_THE_FELLS.value,
+            cls.SIMPLE_CUBE.value,
+            cls.SIMPLE_LOTUS.value,
+        ]
+
 
 class Sources(Enum):
     EXAMPLE_DRIVE_1 = Source(
@@ -139,8 +158,8 @@ class Sources(Enum):
 
 class DummyImportSite(ImportSite):
     @staticmethod
-    def get_base_url() -> str:
-        return "https://dummy-import-site.com"
+    def get_host_names() -> list[str]:
+        return ["dummy-import-site.com"]
 
     @classmethod
     def retrieve_card_list(cls, url: str) -> str:
@@ -148,6 +167,10 @@ class DummyImportSite(ImportSite):
 
 
 class DummyIntegration(GameIntegration):
+    @classmethod
+    def get_game(cls) -> Game:
+        return Game.MTG
+
     @classmethod
     def get_dfc_pairs(cls) -> list[DFCPair]:
         return [DFCPairFactory(front="Ratman", back="Batman"), DFCPairFactory(front="Ratwoman", back="Batwoman")]

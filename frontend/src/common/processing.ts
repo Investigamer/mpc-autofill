@@ -3,50 +3,55 @@
  */
 
 import { toByteArray } from "base64-js";
+// @ts-ignore
+import { parse } from "lil-csv";
 
 import {
+  Card,
   Cardback,
   CardTypePrefixes,
   CardTypeSeparator,
+  CSVHeaders,
   FaceSeparator,
+  FaceSeparatorRegexEscaped,
   ProjectMaxSize,
+  ReversedCardTypePrefixes,
   SelectedImageSeparator,
+  Token,
 } from "@/common/constants";
 import {
+  CardDocument,
+  CSVRow,
   DFCPairs,
   ProcessedLine,
   ProjectMember,
   SearchQuery,
-  SearchSettings,
   SlotProjectMembers,
 } from "@/common/types";
 
+/**
+ * Clean any instances of doubled-up whitespace from `text`.
+ */
 export function sanitiseWhitespace(text: string): string {
-  /**
-   * Clean any instances of doubled-up whitespace from `text`.
-   */
-
   const re = / +(?= )/g;
   return text.replaceAll(re, "").trim();
 }
 
+/**
+ * Remove all text within (parentheses) from `text`.
+ * Does not handle (nested (parentheses)). TODO: update this function to do this
+ */
 export function stripTextInParentheses(text: string): string {
-  /**
-   * Remove all text within (parentheses) from `text`.
-   * Does not handle (nested (parentheses)). TODO: update this function to do this
-   */
-
   const re = /[([].*?[)\]]/g;
   return sanitiseWhitespace(text.replaceAll(re, ""));
 }
 
+/**
+ * Process `query` by converting to lowercase, removing all punctuation, and sanitising whitespace.
+ * Note that hyphens are not removed due to how Elasticsearch's classic tokenizer works:
+ * https://www.elastic.co/guide/en/elasticsearch/reference/7.17/analysis-classic-tokenizer.html
+ */
 export function processQuery(query: string): string {
-  /**
-   * Process `query` by converting to lowercase, removing all punctuation, and sanitising whitespace.
-   * Note that hyphens are not removed due to how Elasticsearch's classic tokenizer works:
-   * https://www.elastic.co/guide/en/elasticsearch/reference/7.17/analysis-classic-tokenizer.html
-   */
-
   // TODO: remove any numbers from the front
   // escaping \[ is technically unnecessary, but I think it's more readable to escape it
   return sanitiseWhitespace(
@@ -57,12 +62,11 @@ export function processQuery(query: string): string {
   );
 }
 
+/**
+ * Identify the prefix of a query. For example, `query`="t:goblin" would yield
+ *   {query: "goblin", cardType: TOKEN}.
+ */
 export function processPrefix(query: string): SearchQuery {
-  /**
-   * Identify the prefix of a query. For example, `query`="t:goblin" would yield
-   *   {query: "goblin", card_type: TOKEN}.
-   */
-
   for (const [prefix, cardType] of Object.entries(CardTypePrefixes)) {
     if (
       prefix !== "" &&
@@ -73,66 +77,117 @@ export function processPrefix(query: string): SearchQuery {
     ) {
       return {
         query: processQuery(query.trimStart().slice(prefix.length + 1)),
-        card_type: cardType,
+        cardType: cardType,
       };
     }
   }
-  return { query: processQuery(query), card_type: CardTypePrefixes[""] };
+  return { query: processQuery(query), cardType: CardTypePrefixes[""] };
 }
 
+const getPhrasesNotAllowedInIdentifiers = (): Array<string> => [
+  SelectedImageSeparator,
+  FaceSeparatorRegexEscaped,
+];
+
+const getPhrasesNotAllowedInIdentifiersNegativeLookahead = (): string =>
+  `(?!.*?(?:${getPhrasesNotAllowedInIdentifiers().join("|")})).*`;
+
+const trimLine = (line: string): string => line.replace(/\s+/g, " ").trim();
+
+/**
+ * Extract the quantity component of `line`, which follows one of these forms:
+ * * `<quantity - numeric> <query>`
+ * * `<quantity - numeric>x <query>`
+ * * `<query>` (quantity is assumed to be 1 in this case)
+ * @param line
+ * @returns Tuple of the form [quantity, remainder of the string]
+ */
+const extractQuantity = (line: string): [number, string] => {
+  const re = /^([0-9]+[xX]?\s+)?(.*)$/g;
+  const results = re.exec(trimLine(line));
+  if (results == null) {
+    return [0, ""];
+  }
+  const quantity = parseInt(
+    (results[1] ?? "1").toLowerCase().replace("x", "").trim()
+  );
+  return [quantity, results[2]];
+};
+
+/**
+ * Unpack `line` into its constituents.
+ *
+ * Inputs to this function are unpacked according to the below schema. For example, consider `4x opt@1234 | char@xyz`:
+ *       4x               opt        @        1234         |      char       @        xyz
+ * └─ quantity ──┘ └─ front query ──┘ └─ front image ID ──┘ └─ back query ──┘ └─ back image ID ──┘
+ *
+ * If quantity is not specified, we assume a quantity of 1.
+ * Specifying a back query is optional.
+ * Specifying an image ID (for each face) is optional.
+ */
 function unpackLine(
   line: string
 ): [number, [string, string | null] | null, [string, string | null] | null] {
-  /**
-   * Unpack `line` into its constituents.
-   *
-   * Inputs to this function are unpacked according to the below schema. For example, consider `4x opt@1234 | char@xyz`:
-   *       4x               opt        @        1234         |      char       @        xyz
-   * └─ quantity ──┘ └─ front query ──┘ └─ front image ID ──┘ └─ back query ──┘ └─ back image ID ──┘
-   *
-   * If quantity is not specified, we assume a quantity of 1.
-   * Specifying a back query is optional.
-   * Specifying an image ID (for each face) is optional.
-   *
-   * (sorry for jamming this much stuff into one regex 🗿)
-   */
+  const [quantity, trimmedLine] = extractQuantity(line);
 
-  const trimmedLine = line.replace(/\s+/g, " ").trim();
-  const re = new RegExp(
-    `^(?:([0-9]+[xX]?\\s)?(.*?)(?:${SelectedImageSeparator}([A-z0-9_\\-]*))?)?(?:(?:\\s*)${
-      "\\" + FaceSeparator
-    }(?:\\s*)(.+?)(?:${SelectedImageSeparator}([A-z0-9_\\-]*))?)?$`,
+  const [frontLine, backLine] = trimmedLine.split(FaceSeparator);
+
+  const faceLineRegex = new RegExp(
+    `^(.+?)(?:${SelectedImageSeparator}(${getPhrasesNotAllowedInIdentifiersNegativeLookahead()}))?$`,
     "gm"
   );
-  const results = re.exec(trimmedLine);
-  if (results == null) {
+  const frontLineResults = [...frontLine.matchAll(faceLineRegex)][0];
+  const backLineResults =
+    backLine !== undefined ? [...backLine.matchAll(faceLineRegex)][0] : null;
+
+  if (frontLineResults === null) {
     return [0, null, null];
   }
   return [
-    parseInt((results[1] ?? "1").toLowerCase().replace("x", "").trim()),
-    [results[2], results[3]],
-    [results[4], results[5]],
+    quantity,
+    [frontLineResults[1]?.trim(), frontLineResults[2]?.trim()],
+    backLineResults !== null
+      ? [backLineResults[1]?.trim(), backLineResults[2]?.trim()]
+      : null,
   ];
 }
 
+export const getDfcBack = (
+  query: string,
+  dfcPairs: DFCPairs,
+  fuzzySearch: boolean
+): string | null => {
+  let dfcPairMatchFront: string | null = null;
+  if (fuzzySearch) {
+    const matches = Object.keys(dfcPairs).filter((dfcPairFront) =>
+      dfcPairFront.startsWith(query)
+    );
+    if (matches.length === 1) {
+      dfcPairMatchFront = matches[0];
+    }
+  } else if (query in dfcPairs) {
+    dfcPairMatchFront = query;
+  }
+  return dfcPairMatchFront ? dfcPairs[dfcPairMatchFront] : null;
+};
+
+/**
+ * Process `line` to identify the search query and the number of instances requested for each face.
+ * If no back query is specified, attempt to match the front query to a DFC pair.
+ * For example, `line`="3x t:goblin" would yield:
+ *   [3, {query: {query: "goblin", cardType: TOKEN, selectedImage: null}}, null].
+ * Another example is `line`="3x forest | b:elf" would yield:
+ *   [
+ *     3,
+ *     {query: {query: "forest", cardType: CARD}, selectedImage: null},
+ *     {query: {query: "elf", cardType: TOKEN}, selectedImage: null},
+ *   ].
+ */
 export function processLine(
   line: string,
   dfcPairs: DFCPairs,
   fuzzySearch: boolean
 ): ProcessedLine {
-  /**
-   * Process `line` to identify the search query and the number of instances requested for each face.
-   * If no back query is specified, attempt to match the front query to a DFC pair.
-   * For example, `line`="3x t:goblin" would yield:
-   *   [3, {query: {query: "goblin", card_type: TOKEN, selectedImage: null}}, null].
-   * Another example is `line`="3x forest | b:elf" would yield:
-   *   [
-   *     3,
-   *     {query: {query: "forest", card_type: CARD}, selectedImage: null},
-   *     {query: {query: "elf", card_type: TOKEN}, selectedImage: null},
-   *   ].
-   */
-
   const [quantity, frontRawQuery, backRawQuery] = unpackLine(line);
 
   let frontQuery: SearchQuery | null = null;
@@ -148,24 +203,12 @@ export function processLine(
     backQuery = processPrefix(backRawQuery[0]);
     backSelectedImage = backRawQuery[1] ?? undefined;
   } else if (frontQuery != null && frontQuery?.query != null) {
-    // typescript isn't smart enough to know that frontQuery.query is not null, so we have to do this
-    const frontQueryQuery = frontQuery.query;
-    let dfcPairMatchFront: string | null = null;
-    if (fuzzySearch) {
-      const matches = Object.keys(dfcPairs).filter((dfcPairFront) =>
-        dfcPairFront.startsWith(frontQueryQuery)
-      );
-      if (matches.length === 1) {
-        dfcPairMatchFront = matches[0];
-      }
-    } else if (frontQueryQuery in dfcPairs) {
-      dfcPairMatchFront = frontQueryQuery;
-    }
-    if (dfcPairMatchFront != null) {
+    const dfcBackQuery = getDfcBack(frontQuery.query, dfcPairs, fuzzySearch);
+    if (dfcBackQuery != null) {
       // match to the card's DFC pair. assume the back is the same card type as the front.
       backQuery = {
-        query: dfcPairs[dfcPairMatchFront],
-        card_type: frontQuery.card_type,
+        query: dfcBackQuery,
+        cardType: frontQuery.cardType,
       };
     }
   }
@@ -185,15 +228,14 @@ export function processLine(
   ];
 }
 
+/**
+ * Process each line in `lines`, ignoring any lines which don't contain relevant information.
+ */
 export function processLines(
   lines: Array<string>,
   dfcPairs: DFCPairs,
   fuzzySearch: boolean
 ): Array<ProcessedLine> {
-  /**
-   * Process each line in `lines`, ignoring any lines which don't contain relevant information.
-   */
-
   const queries: Array<[number, ProjectMember | null, ProjectMember | null]> =
     [];
   lines.forEach((line: string) => {
@@ -219,17 +261,16 @@ export function processStringAsMultipleLines(
   return processLines(lines.split(/\r?\n|\r|\n/g), dfcPairs, fuzzySearch);
 }
 
+/**
+ * This function converts `lines` into a format ready to be added to the Redux store.
+ * The project max size is respected here in addition to in the `addMembers` action
+ * to avoid doing unnecessary processing work if a large list of `ProcessedLine` items
+ * is given.
+ */
 export function convertLinesIntoSlotProjectMembers(
   lines: Array<ProcessedLine>,
   memberCount: number
 ): Array<SlotProjectMembers> {
-  /**
-   * This function converts `lines` into a format ready to be added to the Redux store.
-   * The project max size is respected here in addition to in the `addMembers` action
-   * to avoid doing unnecessary processing work if a large list of `ProcessedLine` items
-   * is given.
-   */
-
   let newMembers: Array<SlotProjectMembers> = [];
   for (const [quantity, frontMember, backMember] of lines) {
     const cappedQuantity = Math.min(
@@ -246,7 +287,7 @@ export function convertLinesIntoSlotProjectMembers(
             selected: false,
           },
           back: {
-            query: backMember?.query ?? { query: null, card_type: Cardback },
+            query: backMember?.query ?? { query: null, cardType: Cardback },
             selectedImage: backMember?.selectedImage,
             selected: false,
           },
@@ -260,13 +301,12 @@ export function convertLinesIntoSlotProjectMembers(
   return newMembers;
 }
 
+/**
+ * Standardise `url` in the following ways:
+ * 1. Ensure a http prefix is included, defaulting to `https://` if not specified
+ * 2. Trim any trailing slash and path
+ */
 export function standardiseURL(url: string): string {
-  /**
-   * Standardise `url` in the following ways:
-   * 1. Ensure a http prefix is included, defaulting to `https://` if not specified
-   * 2. Trim any trailing slash and path
-   */
-
   const re = [...url.matchAll(/^(https?:\/\/)?(.*?)(?:\/.*)?$/gm)][0];
   return (re[1] ?? "https://") + re[2];
 }
@@ -276,5 +316,84 @@ export function formatURL(backendURL: string, routeURL: string): string {
 }
 
 export function base64StringToBlob(base64: string): Blob {
+  // @ts-ignore // TODO: broke in TS 4 to 5 migration
   return new Blob([toByteArray(base64)]);
 }
+
+export const formatPlaceholderText = (placeholders: {
+  [cardType: string]: Array<CardDocument>;
+}): string => {
+  const separator = "\n";
+  const placeholderTextByCardType: Array<string> = [];
+
+  for (const cardType of [Card, Token, Cardback]) {
+    if (placeholders[cardType] != null) {
+      placeholderTextByCardType.push(
+        placeholders[cardType]
+          .map(
+            (x) =>
+              `${Math.floor(Math.random() * 3) + 1}x ${
+                ReversedCardTypePrefixes[cardType]
+              }${stripTextInParentheses(x.name)}`
+          )
+          .join(separator)
+      );
+    }
+  }
+  return placeholderTextByCardType.join(separator + separator);
+};
+
+export const parseCSVRowAsLine = (rawRow: CSVRow): string => {
+  const row = Object.fromEntries(
+    Object.entries(rawRow).map(([key, value]) => [key.trim(), value?.trim()])
+  );
+  let formattedLine = `${row[CSVHeaders.quantity] ?? ""} ${
+    row[CSVHeaders.frontQuery] ?? ""
+  }`;
+  if ((row[CSVHeaders.frontSelectedImage] ?? "").length > 0) {
+    formattedLine += `${SelectedImageSeparator}${
+      row[CSVHeaders.frontSelectedImage]
+    }`;
+  }
+  if ((row[CSVHeaders.backQuery] ?? "").length > 0) {
+    formattedLine += `${FaceSeparator}${row[CSVHeaders.backQuery]}`;
+    if ((row[CSVHeaders.backSelectedImage] ?? "").length > 0) {
+      formattedLine += `${SelectedImageSeparator}${
+        row[CSVHeaders.backSelectedImage]
+      }`;
+    }
+  }
+  return formattedLine;
+};
+
+export const parseCSVFileAsLines = (fileContents: string): Array<string> => {
+  const rows: Array<CSVRow> = parse(fileContents);
+  return rows.map(parseCSVRowAsLine);
+};
+
+export const removeFileExtension = (fileName: string): string =>
+  fileName.replace(/^(.+?)(?:\..+)?$/, "$1");
+
+export const toSearchable = (inputString: string): string =>
+  sanitiseWhitespace(
+    inputString
+      .toLowerCase()
+      .replaceAll(/[\(\[].*?[\)\]]/g, "")
+      .replace("-", " ")
+      .replace(" the ", " ")
+      .replace("’", "'")
+      .replaceAll(/[!"#\$%&'\(\)\*\+,-\.\/:;<=>\?@\[\]\^_`{\|}~\/]/g, "") // remove punctuation
+      .replaceAll(/[0123456789]/g, "") // remove digits
+      .replaceAll(/^the (.*$)/g, "$1") // remove "the " at start of string
+      // remove accents - match elasticsearch `asciifolding` filter. https://stackoverflow.com/a/37511463/13021511
+      .normalize("NFD")
+      .replace(/\p{Diacritic}/gu, "")
+  );
+
+export const extractLanguage = (name: string): [string | undefined, string] => {
+  const languageRegex = /^(?:\{(.+)\} )?(.*?)$/g;
+  const results = [...name.matchAll(languageRegex)][0];
+  const languageCode: string | undefined = results[1]; // TODO: match against valid language codes here
+  const remainderOfName = results[2];
+  return [languageCode, remainderOfName];
+};
